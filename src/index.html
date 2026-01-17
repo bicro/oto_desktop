@@ -19,6 +19,109 @@
             --danger: #ff3b30;
         }
 
+        [data-theme="dark"] {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #2d2d2d;
+            --bg-dark: #f7f7f5;
+            --text-primary: #f7f7f5;
+            --text-secondary: #a0a0a0;
+            --text-muted: #777777;
+            --border: #444444;
+        }
+
+        /* Dark mode specific overrides */
+        [data-theme="dark"] .btn {
+            background: #f7f7f5;
+            color: #1a1a1a;
+        }
+
+        [data-theme="dark"] .btn:hover {
+            background: #e0e0e0;
+        }
+
+        [data-theme="dark"] .btn-primary {
+            background: var(--accent-blue);
+            color: white;
+        }
+
+        [data-theme="dark"] .btn-primary:hover {
+            background: var(--accent-blue-hover);
+        }
+
+        [data-theme="dark"] .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        [data-theme="dark"] .btn-outline {
+            background: transparent;
+            color: var(--text-primary);
+        }
+
+        [data-theme="dark"] .btn-outline:hover {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border-color: var(--border);
+        }
+
+        [data-theme="dark"] .toast {
+            background: #3a3a3a;
+        }
+
+        [data-theme="dark"] .key {
+            background: linear-gradient(180deg, #4a4a4a 0%, #3a3a3a 100%);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+        }
+
+        [data-theme="dark"] .key.highlight {
+            color: white;
+        }
+
+        [data-theme="dark"] .tutorial-header:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        [data-theme="dark"] .level-pill.all {
+            background: rgba(255,255,255,0.15);
+            color: var(--text-secondary);
+        }
+
+        [data-theme="dark"] .level-pill.character {
+            background: rgba(57,197,187,0.3);
+            color: #39c5bb;
+        }
+
+        [data-theme="dark"] .level-pill.deep {
+            background: rgba(138,43,226,0.3);
+            color: #dda0dd;
+        }
+
+        [data-theme="dark"] .shortcut {
+            background: rgba(255,255,255,0.1);
+        }
+
+        [data-theme="dark"] .shortcut kbd,
+        [data-theme="dark"] .tutorial-step-desc kbd {
+            background: #4a4a4a;
+            border-color: #555;
+        }
+
+        [data-theme="dark"] .section-header:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        [data-theme="dark"] .preview-img {
+            background: #2d2d2d;
+        }
+
+        [data-theme="dark"] .history-message code {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        [data-theme="dark"] .history-message pre {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
@@ -72,6 +175,30 @@
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.4; }
+        }
+
+        /* Header right section */
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .theme-toggle {
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 6px 10px;
+            cursor: pointer;
+            color: var(--text-secondary);
+            font-size: 14px;
+            transition: all 0.15s ease;
+            line-height: 1;
+        }
+
+        .theme-toggle:hover {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
         }
 
         /* Sections */
@@ -502,8 +629,8 @@
 
         /* Tutorial Section */
         .tutorial-section {
-            background: linear-gradient(135deg, #2d2d2d 0%, #1a1a1a 100%);
-            color: white;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
             border-radius: 8px;
             margin-bottom: 16px;
             overflow: hidden;
@@ -519,7 +646,7 @@
         }
 
         .tutorial-header:hover {
-            background: rgba(255, 255, 255, 0.05);
+            background: rgba(0, 0, 0, 0.03);
         }
 
         .tutorial-title {
@@ -527,10 +654,12 @@
             font-weight: 600;
             letter-spacing: 1.5px;
             text-transform: uppercase;
+            color: var(--text-muted);
         }
 
         .tutorial-toggle {
             font-size: 12px;
+            color: var(--text-muted);
             transition: transform 0.2s ease;
         }
 
@@ -564,19 +693,21 @@
         .key {
             width: 36px;
             height: 36px;
-            background: linear-gradient(180deg, #4a4a4a 0%, #3a3a3a 100%);
-            border: 1px solid #555;
+            background: linear-gradient(180deg, #f5f5f5 0%, #e8e8e8 100%);
+            border: 1px solid var(--border);
             border-radius: 6px;
             display: flex;
             align-items: center;
             justify-content: center;
             font-size: 16px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+            color: var(--text-primary);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.8);
         }
 
         .key.highlight {
             background: linear-gradient(180deg, var(--accent-blue) 0%, #0052cc 100%);
             border-color: var(--accent-blue);
+            color: white;
         }
 
         /* Level pills */
@@ -596,16 +727,16 @@
             letter-spacing: 0.5px;
         }
 
-        .level-pill.all { background: rgba(255,255,255,0.15); }
-        .level-pill.character { background: rgba(57,197,187,0.3); color: #39c5bb; }
-        .level-pill.deep { background: rgba(138,43,226,0.3); color: #dda0dd; }
+        .level-pill.all { background: rgba(0,0,0,0.08); color: var(--text-secondary); }
+        .level-pill.character { background: rgba(57,197,187,0.15); color: #2a9d8f; }
+        .level-pill.deep { background: rgba(138,43,226,0.15); color: #7b2cbf; }
 
         /* Shortcut display */
         .shortcut {
             display: inline-flex;
             gap: 4px;
             align-items: center;
-            background: rgba(255,255,255,0.1);
+            background: rgba(0,0,0,0.06);
             padding: 4px 10px;
             border-radius: 4px;
             font-family: inherit;
@@ -613,7 +744,8 @@
         }
 
         .shortcut kbd {
-            background: #4a4a4a;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
             padding: 2px 6px;
             border-radius: 3px;
             font-size: 10px;
@@ -631,12 +763,12 @@
             font-size: 11px;
             font-weight: 600;
             margin-bottom: 6px;
-            color: rgba(255,255,255,0.9);
+            color: var(--text-primary);
         }
 
         .tutorial-step-desc {
             font-size: 11px;
-            color: rgba(255,255,255,0.6);
+            color: var(--text-secondary);
             line-height: 1.5;
         }
 
@@ -650,7 +782,8 @@
         }
 
         .tutorial-step-desc kbd {
-            background: #4a4a4a;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
             padding: 2px 6px;
             border-radius: 3px;
             font-size: 10px;
@@ -703,9 +836,12 @@
     <!-- Header -->
     <div class="header">
         <div class="logo">Oto Desktop</div>
-        <div class="status">
-            <span class="status-dot" id="statusDot"></span>
-            <span id="statusText">initializing</span>
+        <div class="header-right">
+            <button class="theme-toggle" id="themeToggle" title="Toggle dark/light mode"></button>
+            <div class="status">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">initializing</span>
+            </div>
         </div>
     </div>
 
@@ -981,6 +1117,25 @@
     <script>
         const { invoke } = window.__TAURI__.core;
         const { listen, emit } = window.__TAURI__.event;
+
+        // Theme toggle functionality
+        const themeToggle = document.getElementById('themeToggle');
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        updateThemeIcon();
+
+        themeToggle.addEventListener('click', () => {
+            const current = document.documentElement.getAttribute('data-theme');
+            const next = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('theme', next);
+            updateThemeIcon();
+        });
+
+        function updateThemeIcon() {
+            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            themeToggle.textContent = isDark ? '\u2600' : '\u263E';
+        }
 
         // Elements
         const statusDot = document.getElementById('statusDot');
