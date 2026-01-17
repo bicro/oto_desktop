@@ -1279,6 +1279,11 @@ async fn reload_character(
 
     println!("[Rust] Creating new overlay window");
 
+    // Load saved scale (default 1.0)
+    let scale = load_overlay_scale();
+    let width = paths::DEFAULT_OVERLAY_WIDTH * scale;
+    let height = paths::DEFAULT_OVERLAY_HEIGHT * scale;
+
     // Recreate the overlay window with fresh state
     let overlay = tauri::WebviewWindowBuilder::new(
         &app,
@@ -1292,7 +1297,7 @@ async fn reload_character(
     .shadow(false)
     .always_on_top(true)
     .skip_taskbar(true)
-    .inner_size(400.0, 600.0)
+    .inner_size(width, height)
     .resizable(true)
     .build()
     .map_err(|e| format!("Failed to create overlay window: {}", e))?;
@@ -1635,6 +1640,64 @@ async fn get_overlay_visible(state: tauri::State<'_, AppState>) -> Result<bool, 
     Ok(*state.overlay_visible.lock().unwrap())
 }
 
+/// Load saved overlay scale (returns 1.0 if not saved)
+fn load_overlay_scale() -> f64 {
+    if let Ok(path) = paths::get_overlay_scale_path() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(scale) = content.trim().parse::<f64>() {
+                return scale.clamp(0.5, 2.0);
+            }
+        }
+    }
+    1.0
+}
+
+/// Save overlay scale to file
+fn save_overlay_scale_to_file(scale: f64) -> Result<(), String> {
+    let path = paths::get_overlay_scale_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+    std::fs::write(&path, scale.to_string())
+        .map_err(|e| format!("Failed to save overlay scale: {}", e))
+}
+
+#[command]
+async fn resize_overlay(app: AppHandle, scale: f64) -> Result<(), String> {
+    let scale = scale.clamp(0.5, 2.0);
+
+    if let Some(window) = app.get_webview_window("overlay") {
+        let width = (paths::DEFAULT_OVERLAY_WIDTH * scale) as u32;
+        let height = (paths::DEFAULT_OVERLAY_HEIGHT * scale) as u32;
+
+        // Resize the window
+        window
+            .set_size(tauri::Size::Physical(tauri::PhysicalSize { width, height }))
+            .map_err(|e| format!("Failed to resize overlay: {}", e))?;
+
+        // Reposition to bottom right
+        if let Ok(Some(monitor)) = window.current_monitor() {
+            let screen_size = monitor.size();
+            let screen_pos = monitor.position();
+            let x = screen_pos.x + (screen_size.width as i32) - (width as i32);
+            let y = screen_pos.y + (screen_size.height as i32) - (height as i32);
+            let _ =
+                window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+        }
+
+        // Save the scale
+        save_overlay_scale_to_file(scale)?;
+    }
+
+    Ok(())
+}
+
+#[command]
+async fn get_overlay_scale() -> Result<f64, String> {
+    Ok(load_overlay_scale())
+}
+
 #[command]
 async fn hide_main_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
@@ -1815,7 +1878,7 @@ async fn take_screenshot(app: AppHandle) -> Result<String, String> {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if stderr.contains("could not create image") {
-                return Err("Screen recording permission required. Go to System Settings > Privacy & Security > Screen Recording and enable Oto Pure.".to_string());
+                return Err("Screen recording permission required. Go to System Settings > Privacy & Security > Screen Recording and enable Oto Desktop.".to_string());
             }
             return Err(format!("screencapture failed: {}", stderr));
         }
@@ -2178,6 +2241,8 @@ fn main() {
             hide_overlay,
             toggle_overlay,
             get_overlay_visible,
+            resize_overlay,
+            get_overlay_scale,
             hide_main_window,
             show_main_window,
             toggle_main_window,

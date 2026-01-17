@@ -5,10 +5,14 @@ use std::path::PathBuf;
 /// URL for downloading the default Live2D model
 pub const DEFAULT_MODEL_URL: &str = "https://storage.googleapis.com/oto_bucket/live2d/Hiyori1.zip";
 
+/// Default overlay window dimensions
+pub const DEFAULT_OVERLAY_WIDTH: f64 = 400.0;
+pub const DEFAULT_OVERLAY_HEIGHT: f64 = 600.0;
+
 /// Gets the application data directory
 pub fn get_app_data_dir() -> Result<PathBuf, String> {
     dirs::data_dir()
-        .map(|p| p.join("com.oto.pure"))
+        .map(|p| p.join("com.oto.desktop"))
         .ok_or_else(|| "Could not find app data directory".to_string())
 }
 
@@ -75,6 +79,11 @@ pub fn get_hitbox_path() -> Result<PathBuf, String> {
 /// Gets the model configuration file path
 pub fn get_model_config_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join(".model_config.json"))
+}
+
+/// Gets the overlay scale file path
+pub fn get_overlay_scale_path() -> Result<PathBuf, String> {
+    get_app_data_dir().map(|p| p.join(".overlay_scale"))
 }
 
 /// Gets the texture directory path for a specific model

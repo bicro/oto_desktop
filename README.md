@@ -1,6 +1,6 @@
-# Oto Pure
+# Oto Desktop
 
-A desktop Live2D character companion with AI chat integration. Oto Pure creates a transparent overlay with an animated character that can see your screen, have conversations with you, and provide AI-assisted responses.
+A desktop Live2D character companion with AI chat integration. Oto Desktop creates a transparent overlay with an animated character that can see your screen, have conversations with you, and provide AI-assisted responses.
 
 ## Features
 
@@ -66,7 +66,7 @@ This formats code, builds, runs clippy, and checks for sensitive files.
 
 ### Initial Setup
 
-1. Launch Oto Pure
+1. Launch Oto Desktop
 2. Enter your OpenAI API key when prompted
 3. The character will appear as a transparent overlay
 
@@ -101,7 +101,7 @@ This formats code, builds, runs clippy, and checks for sensitive files.
 
 In **System Settings > Privacy & Security**, enable:
 - **Accessibility**: Required for global shortcuts (enable for Terminal/IDE)
-- **Screen Recording**: Required for screenshot capture (enable for Oto Pure)
+- **Screen Recording**: Required for screenshot capture (enable for Oto Desktop)
 
 ### Windows
 
@@ -113,7 +113,7 @@ Ensure you have the required system libraries for Tauri applications.
 
 ## Privacy Notice
 
-Oto Pure includes features that access system-level data:
+Oto Desktop includes features that access system-level data:
 
 1. **Screen Capture**: When enabled, screenshots are taken and sent to OpenAI's API to provide context-aware responses. Screenshots are stored locally and not shared except with the configured AI provider.
 

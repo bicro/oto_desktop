@@ -1,4 +1,4 @@
-# Pre-commit check script for oto_pure (Windows)
+# Pre-commit check script for oto_desktop (Windows)
 # Verifies code quality before pushing
 
 $ErrorActionPreference = "Stop"

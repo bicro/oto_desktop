@@ -1,7 +1,7 @@
 [package]
-name = "oto-pure"
+name = "oto-desktop"
 version = "0.1.0"
-description = "Oto Pure - Live2D character overlay"
+description = "Oto Desktop - Live2D character overlay"
 authors = ["Frisson Labs"]
 edition = "2021"
 

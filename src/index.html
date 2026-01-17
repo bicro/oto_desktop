@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Oto Pure</title>
+    <title>Oto Desktop</title>
     <style>
         :root {
             --bg-primary: #f7f7f5;
@@ -702,7 +702,7 @@
 <body>
     <!-- Header -->
     <div class="header">
-        <div class="logo">Oto Pure</div>
+        <div class="logo">Oto Desktop</div>
         <div class="status">
             <span class="status-dot" id="statusDot"></span>
             <span id="statusText">initializing</span>
@@ -815,6 +815,33 @@
             </div>
             <div id="modelProgress" style="display: none; margin-top: 12px; padding: 8px; background: var(--bg-primary); border-radius: 4px; font-size: 11px;">
                 <span id="modelProgressText">Downloading...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Behavior Section -->
+    <div class="section collapsible" id="behaviorSection">
+        <div class="section-header">
+            <div class="section-label">Behavior</div>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
+            <div class="form-row" style="align-items: center;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="headTrackingToggle" checked style="width: 14px; height: 14px;">
+                    <span>Head tracking follows mouse</span>
+                </label>
+            </div>
+            <div class="form-hint" style="margin-top: 4px;">Character head will follow your cursor when enabled</div>
+
+            <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+                <div class="form-label">Character Size</div>
+                <div class="form-row" style="align-items: center; gap: 12px; margin-top: 8px;">
+                    <button class="btn btn-sm" id="zoomOutBtn" style="width: 32px; padding: 4px;">−</button>
+                    <span id="zoomLevelDisplay" style="min-width: 50px; text-align: center; font-size: 13px;">100%</span>
+                    <button class="btn btn-sm" id="zoomInBtn" style="width: 32px; padding: 4px;">+</button>
+                </div>
+                <div class="form-hint" style="margin-top: 4px;">Scale the character window (50% - 200%)</div>
             </div>
         </div>
     </div>
@@ -1292,6 +1319,52 @@
 
         // Load model config on startup
         loadModelConfig();
+
+        // Head tracking toggle
+        const headTrackingToggle = document.getElementById('headTrackingToggle');
+        headTrackingToggle.checked = localStorage.getItem('headTrackingEnabled') !== 'false';
+        headTrackingToggle.addEventListener('change', async () => {
+            const enabled = headTrackingToggle.checked;
+            localStorage.setItem('headTrackingEnabled', enabled);
+            await emit('head-tracking-changed', { enabled });
+        });
+
+        // Character size (zoom) controls
+        const zoomLevelDisplay = document.getElementById('zoomLevelDisplay');
+        const zoomInBtn = document.getElementById('zoomInBtn');
+        const zoomOutBtn = document.getElementById('zoomOutBtn');
+        let currentScale = 1.0;
+
+        async function loadOverlayScale() {
+            try {
+                currentScale = await invoke('get_overlay_scale');
+                zoomLevelDisplay.textContent = Math.round(currentScale * 100) + '%';
+            } catch (err) {
+                console.error('Failed to load overlay scale:', err);
+            }
+        }
+
+        async function updateOverlayScale(newScale) {
+            newScale = Math.max(0.5, Math.min(2.0, newScale));
+            try {
+                await invoke('resize_overlay', { scale: newScale });
+                currentScale = newScale;
+                zoomLevelDisplay.textContent = Math.round(currentScale * 100) + '%';
+            } catch (err) {
+                showToast('Failed to resize: ' + err, 'error');
+            }
+        }
+
+        zoomInBtn.addEventListener('click', () => {
+            updateOverlayScale(currentScale + 0.05);
+        });
+
+        zoomOutBtn.addEventListener('click', () => {
+            updateOverlayScale(currentScale - 0.05);
+        });
+
+        // Load initial scale
+        loadOverlayScale();
 
         // Spawn/Hide character
         spawnBtn.addEventListener('click', async () => {

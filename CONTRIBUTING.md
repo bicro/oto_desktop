@@ -1,6 +1,6 @@
-# Contributing to Oto Pure
+# Contributing to Oto Desktop
 
-Thank you for your interest in contributing to Oto Pure! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to Oto Desktop! This document provides guidelines and information for contributors.
 
 ## Getting Started
 
@@ -15,8 +15,8 @@ Thank you for your interest in contributing to Oto Pure! This document provides 
 1. Fork the repository
 2. Clone your fork:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/oto_pure.git
-   cd oto_pure
+   git clone https://github.com/YOUR_USERNAME/oto_desktop.git
+   cd oto_desktop
    ```
 3. Run the setup script:
    ```bash
@@ -34,7 +34,7 @@ Thank you for your interest in contributing to Oto Pure! This document provides 
 ## Project Structure
 
 ```
-oto_pure/
+oto_desktop/
 ├── src/                    # Frontend (HTML/JavaScript)
 │   ├── index.html         # Main UI
 │   └── overlay.html       # Character overlay

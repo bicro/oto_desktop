@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Oto Pure",
+  "productName": "Oto Desktop",
   "version": "0.1.0",
-  "identifier": "com.oto.pure",
+  "identifier": "com.oto.desktop",
   "build": {
     "beforeDevCommand": "",
     "beforeBuildCommand": "",
@@ -13,7 +13,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Oto Pure",
+        "title": "Oto Desktop",
         "width": 800,
         "height": 600,
         "resizable": true,
@@ -40,9 +40,9 @@
         "enable": true,
         "scope": {
           "allow": [
-            "$APPDATA/com.oto.pure/**/*",
-            "$DATA/com.oto.pure/**/*",
-            "$LOCALDATA/com.oto.pure/**/*"
+            "$APPDATA/com.oto.desktop/**/*",
+            "$DATA/com.oto.desktop/**/*",
+            "$LOCALDATA/com.oto.desktop/**/*"
           ],
           "requireLiteralLeadingDot": false
         }

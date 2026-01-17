@@ -1,9 +1,9 @@
-# Oto Pure - Windows Setup
+# Oto Desktop - Windows Setup
 # Run in PowerShell: .\setup.ps1
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "`nOto Pure Setup (Windows)`n" -ForegroundColor Blue
+Write-Host "`nOto Desktop Setup (Windows)`n" -ForegroundColor Blue
 
 $missing = @()
 

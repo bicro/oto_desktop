@@ -3,8 +3,8 @@
 <plist version="1.0">
 <dict>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Oto Pure needs screen recording permission to see your screen and help you.</string>
+    <string>Oto Desktop needs screen recording permission to see your screen and help you.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Oto Pure needs microphone access for voice chat.</string>
+    <string>Oto Desktop needs microphone access for voice chat.</string>
 </dict>
 </plist>

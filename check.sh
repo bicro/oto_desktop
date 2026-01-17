@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Pre-commit check script for oto_pure
+# Pre-commit check script for oto_desktop
 # Verifies code quality before pushing
 
 # Colors

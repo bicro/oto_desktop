@@ -526,7 +526,7 @@
     </div>
 
     <div class="control-bar">
-        <button class="control-btn" id="newChatBtn" title="New Chat">&#43;</button>
+        <button class="control-btn" id="newChatBtn" title="New Chat">&#x270E;</button>
         <button class="control-btn" id="historyBtn" title="Chat History">&#x2191;</button>
         <button class="control-btn" id="settingsBtn" title="Settings">&#x2699;</button>
         <button class="control-btn" id="closeBtn" title="Close">&#x2715;</button>
@@ -574,7 +574,9 @@
             /** Cooldown timer interval reference */
             cooldownTimer: null,
             /** Timestamp of last escape key press */
-            lastEscapeTime: 0
+            lastEscapeTime: 0,
+            /** Whether head tracking is enabled */
+            headTrackingEnabled: localStorage.getItem('headTrackingEnabled') !== 'false'
         };
 
         // ============ Asset URL Resolution ============
@@ -649,7 +651,8 @@
                 const canvas = document.getElementById('live2dCanvas');
                 this.app = new PIXI.Application({
                     view: canvas,
-                    resizeTo: window,
+                    width: 400,
+                    height: 600,
                     backgroundAlpha: 0,
                     resolution: window.devicePixelRatio || 1,
                     antialias: true,
@@ -719,8 +722,6 @@
                     this.app.stage.addChild(this.model);
                     this.resizeModel();
 
-                    window.addEventListener('resize', () => this.resizeModel());
-
                     console.log('[Live2D] Model loaded successfully!');
                     return { width: this.model.width, height: this.model.height };
                 } catch (error) {
@@ -730,33 +731,31 @@
                 }
             }
 
+            // Sets scale and position based on fixed canvas dimensions
             resizeModel() {
                 if (!this.model) return;
 
-                const { innerWidth, innerHeight } = window;
+                // Canvas is fixed at 400x600
+                const canvasWidth = 400;
+                const canvasHeight = 600;
 
                 if (this.bustMode) {
-                    const baseScaleX = innerWidth / this.model.width;
-                    const baseScaleY = innerHeight / this.model.height;
+                    const baseScaleX = canvasWidth / this.model.width;
+                    const baseScaleY = canvasHeight / this.model.height;
                     const baseScale = Math.min(baseScaleX, baseScaleY);
                     const bustScale = baseScale * 2.0;
-
                     this.model.scale.set(bustScale);
-                    // Center in window (window is positioned in bottom right of screen)
-                    this.model.x = innerWidth / 2;
-                    this.model.y = innerHeight * 1.02;
-                    this.model.anchor.set(0.5, 0.5);
                 } else {
-                    const scaleX = innerWidth / this.model.width;
-                    const scaleY = innerHeight / this.model.height;
+                    const scaleX = canvasWidth / this.model.width;
+                    const scaleY = canvasHeight / this.model.height;
                     const scale = Math.min(scaleX, scaleY) * 0.9;
-
                     this.model.scale.set(scale);
-                    // Center in window
-                    this.model.x = innerWidth / 2;
-                    this.model.y = innerHeight;
-                    this.model.anchor.set(0.5, 0.5);
                 }
+
+                // Center in fixed canvas
+                this.model.x = canvasWidth / 2;
+                this.model.y = this.bustMode ? canvasHeight * 1.02 : canvasHeight;
+                this.model.anchor.set(0.5, 0.5);
             }
 
             getCoreModel() {
@@ -804,6 +803,9 @@
 
         // ============ Tauri Event Handlers ============
         listen('device-changed', async (event) => {
+            // Skip if head tracking is disabled
+            if (!AppState.headTrackingEnabled) return;
+
             const { kind, value } = event.payload;
 
             if (kind === 'MouseMove') {
@@ -818,6 +820,18 @@
                 live2dOverlay.setParameter('ParamAngleX', angleX);
                 live2dOverlay.setParameter('ParamAngleY', angleY);
                 live2dOverlay.setParameter('ParamBodyAngleX', angleX * 0.3);
+            }
+        });
+
+        // Listen for head tracking toggle from settings
+        listen('head-tracking-changed', (event) => {
+            AppState.headTrackingEnabled = event.payload.enabled;
+            localStorage.setItem('headTrackingEnabled', event.payload.enabled);
+            // Reset head position when disabled
+            if (!event.payload.enabled) {
+                live2dOverlay.setParameter('ParamAngleX', 0);
+                live2dOverlay.setParameter('ParamAngleY', 0);
+                live2dOverlay.setParameter('ParamBodyAngleX', 0);
             }
         });
 
