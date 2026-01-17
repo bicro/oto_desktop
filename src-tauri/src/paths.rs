@@ -2,8 +2,8 @@
 
 use std::path::PathBuf;
 
-/// URL for downloading the default Hiyori Live2D model
-pub const HIYORI_MODEL_URL: &str = "https://storage.googleapis.com/oto_bucket/live2d/Hiyori1.zip";
+/// URL for downloading the default Live2D model
+pub const DEFAULT_MODEL_URL: &str = "https://storage.googleapis.com/oto_bucket/live2d/Hiyori1.zip";
 
 /// Gets the application data directory
 pub fn get_app_data_dir() -> Result<PathBuf, String> {
@@ -72,17 +72,31 @@ pub fn get_hitbox_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join(".hitbox.json"))
 }
 
-/// Gets the texture directory path
-pub fn get_texture_dir() -> Result<PathBuf, String> {
-    get_models_dir().map(|p| p.join("Hiyori/Hiyori.2048"))
+/// Gets the model configuration file path
+pub fn get_model_config_path() -> Result<PathBuf, String> {
+    get_app_data_dir().map(|p| p.join(".model_config.json"))
 }
 
-/// Gets the originals backup directory path
-pub fn get_originals_dir() -> Result<PathBuf, String> {
-    get_texture_dir().map(|p| p.join("originals"))
+/// Gets the texture directory path for a specific model
+pub fn get_texture_dir_for_model(
+    model_folder: &str,
+    texture_folder: &str,
+) -> Result<PathBuf, String> {
+    get_models_dir().map(|p| p.join(model_folder).join(texture_folder))
 }
 
-/// Gets the texture versions directory path
-pub fn get_versions_dir() -> Result<PathBuf, String> {
-    get_texture_dir().map(|p| p.join("versions"))
+/// Gets the originals backup directory path for a specific model
+pub fn get_originals_dir_for_model(
+    model_folder: &str,
+    texture_folder: &str,
+) -> Result<PathBuf, String> {
+    get_texture_dir_for_model(model_folder, texture_folder).map(|p| p.join("originals"))
+}
+
+/// Gets the texture versions directory path for a specific model
+pub fn get_versions_dir_for_model(
+    model_folder: &str,
+    texture_folder: &str,
+) -> Result<PathBuf, String> {
+    get_texture_dir_for_model(model_folder, texture_folder).map(|p| p.join("versions"))
 }

@@ -114,6 +114,189 @@ pub struct InitStatus {
     pub models_path: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ModelConfig {
+    pub url: String,
+    pub folder: String,
+    pub model_file: String,
+    pub texture_folder: Option<String>,
+}
+
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            url: DEFAULT_MODEL_URL.to_string(),
+            folder: "Hiyori".to_string(),
+            model_file: "Hiyori.model3.json".to_string(),
+            texture_folder: Some("Hiyori.2048".to_string()),
+        }
+    }
+}
+
+fn load_model_config() -> Result<ModelConfig, String> {
+    let config_path = get_model_config_path()?;
+    if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read model config: {}", e))?;
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse model config: {}", e))
+    } else {
+        Ok(ModelConfig::default())
+    }
+}
+
+fn save_model_config(config: &ModelConfig) -> Result<(), String> {
+    let config_path = get_model_config_path()?;
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+    let content = serde_json::to_string_pretty(config)
+        .map_err(|e| format!("Failed to serialize model config: {}", e))?;
+    std::fs::write(&config_path, content).map_err(|e| format!("Failed to save model config: {}", e))
+}
+
+/// Maximum depth to search for model files in nested directories
+const MAX_MODEL_SEARCH_DEPTH: u32 = 3;
+
+/// Recursively find a .model3.json file in a directory (up to max_depth levels)
+fn find_model_file_recursive(dir: &PathBuf, max_depth: u32) -> Option<(PathBuf, String)> {
+    if max_depth == 0 {
+        return None;
+    }
+
+    let entries: Vec<_> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .collect();
+
+    // First pass: look for model file at this level
+    for entry in &entries {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if entry.path().is_file() && name.ends_with(".model3.json") {
+            return Some((dir.clone(), name));
+        }
+    }
+
+    // Second pass: search subdirectories
+    for entry in &entries {
+        if entry.path().is_dir() {
+            if let Some(result) = find_model_file_recursive(&entry.path(), max_depth - 1) {
+                return Some(result);
+            }
+        }
+    }
+
+    None
+}
+
+/// Reorganize flat model files into a subdirectory
+/// Called when a zip extracts files directly without a wrapper folder
+fn reorganize_flat_model(models_dir: &PathBuf, model_filename: &str) -> Result<String, String> {
+    let model_name = model_filename.trim_end_matches(".model3.json");
+    let new_folder = models_dir.join(model_name);
+
+    std::fs::create_dir_all(&new_folder)
+        .map_err(|e| format!("Failed to create model folder: {}", e))?;
+
+    // Move all files from models_dir to the new subfolder
+    let entries: Vec<_> = std::fs::read_dir(models_dir)
+        .map_err(|e| format!("Failed to read models dir: {}", e))?
+        .filter_map(|e| e.ok())
+        .collect();
+
+    for entry in entries {
+        let file_path = entry.path();
+
+        // Skip the folder we just created
+        if file_path == new_folder {
+            continue;
+        }
+
+        let dest = new_folder.join(entry.file_name());
+        std::fs::rename(&file_path, &dest)
+            .map_err(|e| format!("Failed to move {:?}: {}", entry.file_name(), e))?;
+    }
+
+    Ok(model_name.to_string())
+}
+
+/// Auto-detect model structure after extraction
+fn detect_model_structure(
+    models_dir: &PathBuf,
+) -> Result<(String, String, Option<String>), String> {
+    let entries: Vec<_> = std::fs::read_dir(models_dir)
+        .map_err(|e| format!("Failed to read models directory: {}", e))?
+        .filter_map(|e| e.ok())
+        .collect();
+
+    // Check if model file is directly in models_dir (flat zip structure)
+    for entry in &entries {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if entry.path().is_file() && name.ends_with(".model3.json") {
+            let model_name = reorganize_flat_model(models_dir, &name)?;
+            let model_folder = models_dir.join(&model_name);
+            let texture_folder = find_texture_folder(&model_folder);
+            return Ok((model_name, name, texture_folder));
+        }
+    }
+
+    // Search subdirectories for model files
+    for entry in entries {
+        if !entry.path().is_dir() {
+            continue;
+        }
+
+        let folder_path = entry.path();
+
+        if let Some((model_dir, model_file)) =
+            find_model_file_recursive(&folder_path, MAX_MODEL_SEARCH_DEPTH)
+        {
+            let texture_folder = find_texture_folder(&model_dir);
+            let relative_path = model_dir
+                .strip_prefix(models_dir)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| entry.file_name().to_string_lossy().to_string());
+
+            return Ok((relative_path, model_file, texture_folder));
+        }
+    }
+
+    Err("No Live2D model found in extracted files".to_string())
+}
+
+/// Find texture folder within a model directory
+fn find_texture_folder(model_dir: &PathBuf) -> Option<String> {
+    if let Ok(entries) = std::fs::read_dir(model_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            if entry.path().is_dir() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                // Common Live2D texture folder patterns
+                if name.ends_with(".2048")
+                    || name.ends_with(".4096")
+                    || name.ends_with(".1024")
+                    || name == "textures"
+                {
+                    return Some(name);
+                }
+            }
+        }
+        // Fallback: look for folder containing .png files
+        for entry in std::fs::read_dir(model_dir).ok()?.filter_map(|e| e.ok()) {
+            if entry.path().is_dir() {
+                let dir_path = entry.path();
+                if let Ok(files) = std::fs::read_dir(&dir_path) {
+                    for file in files.filter_map(|f| f.ok()) {
+                        if file.file_name().to_string_lossy().ends_with(".png") {
+                            return Some(entry.file_name().to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 #[command]
 async fn init_app(app: AppHandle) -> Result<InitStatus, String> {
     let models_dir = get_models_dir()?;
@@ -121,19 +304,40 @@ async fn init_app(app: AppHandle) -> Result<InitStatus, String> {
     println!("[init_app] Starting initialization...");
     println!("[init_app] Models dir: {:?}", models_dir);
 
+    // Load or create model config
+    let mut config = load_model_config().unwrap_or_default();
+
     // Emit progress events to frontend
     let emit_progress = |step: &str, message: &str| {
         println!("[init_app] {}: {}", step, message);
         let _ = app.emit("init-progress", json!({ "step": step, "message": message }));
     };
 
-    // Check/download Hiyori model
-    let hiyori_dir = models_dir.join("Hiyori");
-    if !hiyori_dir.exists() {
-        emit_progress("model", "Downloading Hiyori model...");
-        match download_and_extract_zip(HIYORI_MODEL_URL, &models_dir).await {
+    // Check if model exists
+    let model_dir = models_dir.join(&config.folder);
+    if !model_dir.exists() {
+        emit_progress("model", "Downloading model...");
+        match download_and_extract_zip(&config.url, &models_dir).await {
             Ok(_) => {
-                emit_progress("model", "Hiyori model ready!");
+                // Auto-detect model structure after download
+                match detect_model_structure(&models_dir) {
+                    Ok((folder, model_file, texture_folder)) => {
+                        config.folder = folder;
+                        config.model_file = model_file;
+                        config.texture_folder = texture_folder;
+                        save_model_config(&config)?;
+                        emit_progress("model", "Model ready!");
+                    }
+                    Err(e) => {
+                        println!(
+                            "[init_app] WARNING: Could not detect model structure: {}",
+                            e
+                        );
+                        // Use defaults for the default model
+                        save_model_config(&config)?;
+                        emit_progress("model", "Model ready!");
+                    }
+                }
             }
             Err(e) => {
                 println!("[init_app] ERROR downloading model: {}", e);
@@ -141,7 +345,14 @@ async fn init_app(app: AppHandle) -> Result<InitStatus, String> {
             }
         }
     } else {
-        println!("[init_app] Hiyori model already exists, skipping");
+        println!(
+            "[init_app] Model already exists at {:?}, skipping download",
+            model_dir
+        );
+        // Ensure config is saved even if model already exists
+        if !get_model_config_path()?.exists() {
+            save_model_config(&config)?;
+        }
     }
 
     emit_progress("done", "All ready!");
@@ -177,7 +388,71 @@ async fn read_file_as_bytes(path: String) -> Result<Vec<u8>, String> {
 #[command]
 async fn is_initialized() -> Result<bool, String> {
     let models_dir = get_models_dir()?;
-    Ok(models_dir.join("Hiyori").exists())
+    let config = load_model_config().unwrap_or_default();
+    Ok(models_dir.join(&config.folder).exists())
+}
+
+// ============ Model Config Commands ============
+
+#[command]
+async fn get_model_config() -> Result<ModelConfig, String> {
+    load_model_config()
+}
+
+#[command]
+async fn change_model(app: AppHandle, url: String) -> Result<ModelConfig, String> {
+    let models_dir = get_models_dir()?;
+
+    println!("[change_model] Changing model to: {}", url);
+
+    // Emit progress
+    let _ = app.emit(
+        "model-change-progress",
+        json!({ "status": "downloading", "message": "Downloading new model..." }),
+    );
+
+    // Clear existing models
+    if models_dir.exists() {
+        std::fs::remove_dir_all(&models_dir)
+            .map_err(|e| format!("Failed to clear models directory: {}", e))?;
+    }
+    std::fs::create_dir_all(&models_dir)
+        .map_err(|e| format!("Failed to create models directory: {}", e))?;
+
+    // Download and extract new model
+    download_and_extract_zip(&url, &models_dir).await?;
+
+    let _ = app.emit(
+        "model-change-progress",
+        json!({ "status": "detecting", "message": "Detecting model structure..." }),
+    );
+
+    // Detect model structure
+    let (folder, model_file, texture_folder) = detect_model_structure(&models_dir)?;
+
+    // Save new config
+    let config = ModelConfig {
+        url: url.clone(),
+        folder,
+        model_file,
+        texture_folder,
+    };
+    save_model_config(&config)?;
+
+    let _ = app.emit(
+        "model-change-progress",
+        json!({ "status": "complete", "message": "Model changed successfully!" }),
+    );
+
+    println!("[change_model] Model changed successfully: {:?}", config);
+
+    Ok(config)
+}
+
+#[command]
+async fn reset_model(app: AppHandle) -> Result<ModelConfig, String> {
+    // Reset to default model
+    change_model(app, DEFAULT_MODEL_URL.to_string()).await
 }
 
 // ============ API Key Commands ============
@@ -746,16 +1021,31 @@ async fn generate_texture(prompt: String) -> Result<String, String> {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
     use image::GenericImageView;
 
-    let texture_dir = get_texture_dir()?;
-    let originals_dir = get_originals_dir()?;
+    // Load model config for dynamic paths
+    let config = load_model_config()?;
+    let texture_folder = config
+        .texture_folder
+        .ok_or_else(|| "No texture folder configured for this model".to_string())?;
+    let texture_dir = get_texture_dir_for_model(&config.folder, &texture_folder)?;
+    let originals_dir = get_originals_dir_for_model(&config.folder, &texture_folder)?;
 
     // Get OpenAI API key
     let api_key = get_api_key()
         .await?
         .ok_or_else(|| "No API key configured".to_string())?;
 
-    // Process both texture files
-    let texture_files = ["hiyori_texture_00.png", "hiyori_texture_01.png"];
+    // Discover texture files dynamically
+    let texture_files: Vec<String> = std::fs::read_dir(&texture_dir)
+        .map_err(|e| format!("Failed to read texture directory: {}", e))?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "png"))
+        .filter(|e| !e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+
+    if texture_files.is_empty() {
+        return Err("No texture files found in model".to_string());
+    }
 
     for texture_file in &texture_files {
         let texture_path = texture_dir.join(texture_file);
@@ -881,7 +1171,7 @@ async fn generate_texture(prompt: String) -> Result<String, String> {
 
     // Save this generation as a version
     let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let version_dir = get_versions_dir()?.join(&timestamp);
+    let version_dir = get_versions_dir_for_model(&config.folder, &texture_folder)?.join(&timestamp);
     std::fs::create_dir_all(&version_dir)
         .map_err(|e| format!("Failed to create version dir: {}", e))?;
 
@@ -909,45 +1199,63 @@ async fn generate_texture(prompt: String) -> Result<String, String> {
 
 #[derive(Serialize)]
 pub struct TexturePaths {
-    pub current_00: Option<String>,
-    pub current_01: Option<String>,
-    pub original_00: Option<String>,
-    pub original_01: Option<String>,
+    pub current_textures: Vec<String>,
+    pub original_textures: Vec<String>,
     pub has_original: bool,
+    pub texture_enabled: bool,
 }
 
 #[command]
 async fn get_texture_paths() -> Result<TexturePaths, String> {
-    let texture_dir = get_texture_dir()?;
-    let originals_dir = get_originals_dir()?;
+    let config = load_model_config()?;
 
-    let current_00_path = texture_dir.join("hiyori_texture_00.png");
-    let current_01_path = texture_dir.join("hiyori_texture_01.png");
-    let original_00_path = originals_dir.join("hiyori_texture_00.png");
-    let original_01_path = originals_dir.join("hiyori_texture_01.png");
+    // Check if texture editing is enabled for this model
+    let texture_folder = match &config.texture_folder {
+        Some(folder) => folder.clone(),
+        None => {
+            return Ok(TexturePaths {
+                current_textures: vec![],
+                original_textures: vec![],
+                has_original: false,
+                texture_enabled: false,
+            });
+        }
+    };
+
+    let texture_dir = get_texture_dir_for_model(&config.folder, &texture_folder)?;
+    let originals_dir = get_originals_dir_for_model(&config.folder, &texture_folder)?;
+
+    // Discover current textures
+    let current_textures: Vec<String> = if texture_dir.exists() {
+        std::fs::read_dir(&texture_dir)
+            .map_err(|e| format!("Failed to read texture directory: {}", e))?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "png"))
+            .filter(|e| !e.path().is_dir())
+            .map(|e| e.path().to_string_lossy().to_string())
+            .collect()
+    } else {
+        vec![]
+    };
+
+    // Discover original textures
+    let original_textures: Vec<String> = if originals_dir.exists() {
+        std::fs::read_dir(&originals_dir)
+            .map_err(|e| format!("Failed to read originals directory: {}", e))?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "png"))
+            .filter(|e| !e.path().is_dir())
+            .map(|e| e.path().to_string_lossy().to_string())
+            .collect()
+    } else {
+        vec![]
+    };
 
     Ok(TexturePaths {
-        current_00: if current_00_path.exists() {
-            Some(current_00_path.to_string_lossy().to_string())
-        } else {
-            None
-        },
-        current_01: if current_01_path.exists() {
-            Some(current_01_path.to_string_lossy().to_string())
-        } else {
-            None
-        },
-        original_00: if original_00_path.exists() {
-            Some(original_00_path.to_string_lossy().to_string())
-        } else {
-            None
-        },
-        original_01: if original_01_path.exists() {
-            Some(original_01_path.to_string_lossy().to_string())
-        } else {
-            None
-        },
-        has_original: original_00_path.exists(),
+        has_original: !original_textures.is_empty(),
+        current_textures,
+        original_textures,
+        texture_enabled: true,
     })
 }
 
@@ -1032,8 +1340,13 @@ async fn reload_character(
 
 #[command]
 async fn get_texture_versions() -> Result<Vec<TextureVersion>, String> {
-    let versions_dir = get_versions_dir()?;
-    let originals_dir = get_originals_dir()?;
+    let config = load_model_config()?;
+    let texture_folder = config
+        .texture_folder
+        .ok_or_else(|| "No texture folder configured".to_string())?;
+
+    let versions_dir = get_versions_dir_for_model(&config.folder, &texture_folder)?;
+    let originals_dir = get_originals_dir_for_model(&config.folder, &texture_folder)?;
 
     let mut versions = Vec::new();
 
@@ -1066,12 +1379,24 @@ async fn get_texture_versions() -> Result<Vec<TextureVersion>, String> {
     versions.sort_by(|a, b| b.id.cmp(&a.id)); // Newest first
 
     // Add "original" as the last option if originals exist
-    if originals_dir.exists() && originals_dir.join("hiyori_texture_00.png").exists() {
-        versions.push(TextureVersion {
-            id: "original".to_string(),
-            created_at: "Original".to_string(),
-            prompt: Some("Original textures".to_string()),
-        });
+    if originals_dir.exists() {
+        // Check if any png files exist in originals
+        let has_originals = std::fs::read_dir(&originals_dir)
+            .ok()
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .any(|e| e.path().extension().is_some_and(|ext| ext == "png"))
+            })
+            .unwrap_or(false);
+
+        if has_originals {
+            versions.push(TextureVersion {
+                id: "original".to_string(),
+                created_at: "Original".to_string(),
+                prompt: Some("Original textures".to_string()),
+            });
+        }
     }
 
     Ok(versions)
@@ -1079,26 +1404,34 @@ async fn get_texture_versions() -> Result<Vec<TextureVersion>, String> {
 
 #[command]
 async fn apply_texture_version(version_id: String) -> Result<String, String> {
-    let texture_dir = get_texture_dir()?;
-    let texture_files = ["hiyori_texture_00.png", "hiyori_texture_01.png"];
+    let config = load_model_config()?;
+    let texture_folder = config
+        .texture_folder
+        .ok_or_else(|| "No texture folder configured".to_string())?;
+
+    let texture_dir = get_texture_dir_for_model(&config.folder, &texture_folder)?;
 
     // Handle "original" as a special case
     let source_dir = if version_id == "original" {
-        get_originals_dir()?
+        get_originals_dir_for_model(&config.folder, &texture_folder)?
     } else {
-        get_versions_dir()?.join(&version_id)
+        get_versions_dir_for_model(&config.folder, &texture_folder)?.join(&version_id)
     };
 
     if !source_dir.exists() {
         return Err("Version not found".to_string());
     }
 
-    for texture_file in &texture_files {
-        let src = source_dir.join(texture_file);
-        let dst = texture_dir.join(texture_file);
-        if src.exists() {
-            std::fs::copy(&src, &dst)
-                .map_err(|e| format!("Failed to apply {}: {}", texture_file, e))?;
+    // Discover and copy all texture files from the source
+    for entry in
+        std::fs::read_dir(&source_dir).map_err(|e| format!("Failed to read source: {}", e))?
+    {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.path().extension().is_some_and(|ext| ext == "png") {
+            let file_name = entry.file_name();
+            let dst = texture_dir.join(&file_name);
+            std::fs::copy(entry.path(), &dst)
+                .map_err(|e| format!("Failed to apply {:?}: {}", file_name, e))?;
         }
     }
 
@@ -1119,7 +1452,12 @@ async fn delete_texture_version(version_id: String) -> Result<String, String> {
         return Err("Cannot delete original textures".to_string());
     }
 
-    let versions_dir = get_versions_dir()?;
+    let config = load_model_config()?;
+    let texture_folder = config
+        .texture_folder
+        .ok_or_else(|| "No texture folder configured".to_string())?;
+
+    let versions_dir = get_versions_dir_for_model(&config.folder, &texture_folder)?;
     let version_path = versions_dir.join(&version_id);
 
     if !version_path.exists() {
@@ -1833,6 +2171,9 @@ fn main() {
             read_file_as_text,
             read_file_as_bytes,
             is_initialized,
+            get_model_config,
+            change_model,
+            reset_model,
             show_overlay,
             hide_overlay,
             toggle_overlay,

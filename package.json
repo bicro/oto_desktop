@@ -4,6 +4,10 @@
   "description": "A desktop Live2D character companion with AI chat integration",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bicro/oto_desktop"
+  },
   "keywords": [
     "live2d",
     "ai",

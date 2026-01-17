@@ -785,11 +785,13 @@
             modelLoadInProgress = true;
 
             try {
+                // Get model config for dynamic model loading
+                const config = await invoke('get_model_config');
                 const modelsPath = await invoke('get_paths');
-                const modelPath = `${modelsPath}/Hiyori`;
-                const modelFileName = 'Hiyori.model3.json';
+                const modelPath = `${modelsPath}/${config.folder}`;
+                const modelFileName = config.model_file;
 
-                console.log('[Overlay] Auto-loading model:', modelPath);
+                console.log('[Overlay] Auto-loading model:', modelPath, modelFileName);
                 await live2dOverlay.loadModel(modelPath, modelFileName);
 
                 // Start device listening for head tracking

@@ -794,6 +794,31 @@
         </div>
     </div>
 
+    <!-- Model Section -->
+    <div class="section collapsible" id="modelSection">
+        <div class="section-header">
+            <div class="section-label">Model</div>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
+            <div class="form-group">
+                <div class="form-label">Live2D Model URL</div>
+                <input type="text" id="modelUrlInput" placeholder="https://example.com/model.zip" style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 11px;" />
+                <div class="form-hint">URL to a .zip file containing a Live2D Cubism model</div>
+            </div>
+            <div id="currentModelInfo" style="margin: 12px 0; padding: 8px; background: var(--bg-primary); border-radius: 4px; font-size: 11px;">
+                <div style="color: var(--text-muted);">Current model: <span id="currentModelName" style="color: var(--text-primary);">Loading...</span></div>
+            </div>
+            <div class="form-row" style="gap: 8px;">
+                <button class="btn btn-sm" id="applyModelBtn">Apply</button>
+                <button class="btn btn-outline btn-sm" id="resetModelBtn">Reset to Default</button>
+            </div>
+            <div id="modelProgress" style="display: none; margin-top: 12px; padding: 8px; background: var(--bg-primary); border-radius: 4px; font-size: 11px;">
+                <span id="modelProgressText">Downloading...</span>
+            </div>
+        </div>
+    </div>
+
     <!-- Prompts Section -->
     <div class="section collapsible" id="promptsSection">
         <div class="section-header">
@@ -965,6 +990,14 @@
         const texturePromptInput = document.getElementById('texturePromptInput');
         const generateTextureBtn = document.getElementById('generateTextureBtn');
 
+        // Model section elements
+        const modelUrlInput = document.getElementById('modelUrlInput');
+        const applyModelBtn = document.getElementById('applyModelBtn');
+        const resetModelBtn = document.getElementById('resetModelBtn');
+        const currentModelName = document.getElementById('currentModelName');
+        const modelProgress = document.getElementById('modelProgress');
+        const modelProgressText = document.getElementById('modelProgressText');
+
         // Tutorial collapse toggle
         const tutorialSection = document.getElementById('tutorialSection');
         const tutorialHeader = document.getElementById('tutorialHeader');
@@ -1024,21 +1057,28 @@
                 const paths = await invoke('get_texture_paths');
                 const { convertFileSrc } = window.__TAURI__.core;
 
-                if (paths.has_original) {
+                // Check if texture editing is enabled for this model
+                if (!paths.texture_enabled) {
+                    texturePreview.style.display = 'none';
+                    return;
+                }
+
+                if (paths.has_original && paths.original_textures.length > 0) {
                     // Add cache-busting timestamp
                     const timestamp = Date.now();
 
-                    if (paths.original_00) {
-                        originalTexture00.src = convertFileSrc(paths.original_00) + '?t=' + timestamp;
+                    // Use first two textures (matching original UI layout)
+                    if (paths.original_textures[0]) {
+                        originalTexture00.src = convertFileSrc(paths.original_textures[0]) + '?t=' + timestamp;
                     }
-                    if (paths.current_00) {
-                        currentTexture00.src = convertFileSrc(paths.current_00) + '?t=' + timestamp;
+                    if (paths.current_textures[0]) {
+                        currentTexture00.src = convertFileSrc(paths.current_textures[0]) + '?t=' + timestamp;
                     }
-                    if (paths.original_01) {
-                        originalTexture01.src = convertFileSrc(paths.original_01) + '?t=' + timestamp;
+                    if (paths.original_textures[1]) {
+                        originalTexture01.src = convertFileSrc(paths.original_textures[1]) + '?t=' + timestamp;
                     }
-                    if (paths.current_01) {
-                        currentTexture01.src = convertFileSrc(paths.current_01) + '?t=' + timestamp;
+                    if (paths.current_textures[1]) {
+                        currentTexture01.src = convertFileSrc(paths.current_textures[1]) + '?t=' + timestamp;
                     }
 
                     texturePreview.style.display = 'flex';
@@ -1167,6 +1207,91 @@
                 showToast('Failed to save key: ' + err, 'error');
             }
         });
+
+        // Model section handlers
+        async function loadModelConfig() {
+            try {
+                const config = await invoke('get_model_config');
+                modelUrlInput.value = config.url;
+                currentModelName.textContent = config.folder;
+            } catch (err) {
+                console.error('Failed to load model config:', err);
+                currentModelName.textContent = 'Unknown';
+            }
+        }
+
+        applyModelBtn.addEventListener('click', async () => {
+            const url = modelUrlInput.value.trim();
+            if (!url) {
+                showToast('Please enter a model URL', 'error');
+                return;
+            }
+            if (!url.endsWith('.zip')) {
+                showToast('URL must point to a .zip file', 'error');
+                return;
+            }
+
+            applyModelBtn.disabled = true;
+            resetModelBtn.disabled = true;
+            modelProgress.style.display = 'block';
+            modelProgressText.textContent = 'Downloading model...';
+
+            try {
+                const config = await invoke('change_model', { url });
+                currentModelName.textContent = config.folder;
+                showToast('Model changed to ' + config.folder, 'success');
+
+                // Reload the character with new model
+                modelProgressText.textContent = 'Reloading character...';
+                await invoke('reload_character');
+
+                modelProgress.style.display = 'none';
+            } catch (err) {
+                showToast('Failed to change model: ' + err, 'error');
+                modelProgress.style.display = 'none';
+            } finally {
+                applyModelBtn.disabled = false;
+                resetModelBtn.disabled = false;
+            }
+        });
+
+        resetModelBtn.addEventListener('click', async () => {
+            applyModelBtn.disabled = true;
+            resetModelBtn.disabled = true;
+            modelProgress.style.display = 'block';
+            modelProgressText.textContent = 'Resetting to default model...';
+
+            try {
+                const config = await invoke('reset_model');
+                modelUrlInput.value = config.url;
+                currentModelName.textContent = config.folder;
+                showToast('Model reset to default', 'success');
+
+                // Reload the character
+                modelProgressText.textContent = 'Reloading character...';
+                await invoke('reload_character');
+
+                modelProgress.style.display = 'none';
+            } catch (err) {
+                showToast('Failed to reset model: ' + err, 'error');
+                modelProgress.style.display = 'none';
+            } finally {
+                applyModelBtn.disabled = false;
+                resetModelBtn.disabled = false;
+            }
+        });
+
+        // Listen for model change progress events
+        listen('model-change-progress', (event) => {
+            const { status, message } = event.payload;
+            modelProgressText.textContent = message;
+            if (status === 'complete') {
+                modelProgress.style.display = 'none';
+            }
+        });
+
+        // Load model config on startup
+        loadModelConfig();
 
         // Spawn/Hide character
         spawnBtn.addEventListener('click', async () => {
