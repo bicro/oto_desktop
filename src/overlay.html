@@ -28,8 +28,6 @@
         }
 
         #live2dCanvas {
-            width: 100%;
-            height: 100%;
             display: block;
             pointer-events: none;
         }
@@ -99,6 +97,51 @@
 
         .control-btn.active {
             background: rgba(76, 175, 80, 0.8);
+        }
+
+        /* Scale controls for transform edit mode */
+        .scale-controls {
+            position: fixed;
+            top: 50%;
+            right: 10px;
+            transform: translateY(-50%);
+            display: none;
+            flex-direction: column;
+            gap: 8px;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 20px;
+            -webkit-app-region: no-drag;
+            z-index: 1500;
+        }
+
+        .scale-controls.visible {
+            display: flex;
+        }
+
+        .scale-btn {
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 255, 255, 0.3);
+            color: white;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .scale-btn:hover {
+            background: rgba(0, 255, 255, 0.5);
+            transform: scale(1.1);
+        }
+
+        .scale-btn:active {
+            transform: scale(0.95);
         }
 
         .status-indicator {
@@ -532,6 +575,12 @@
         <button class="control-btn" id="closeBtn" title="Close">&#x2715;</button>
     </div>
 
+    <!-- Scale controls (visible in transform edit mode) -->
+    <div class="scale-controls" id="scaleControls">
+        <button class="scale-btn" id="scaleUpBtn" title="Increase Size">+</button>
+        <button class="scale-btn" id="scaleDownBtn" title="Decrease Size">-</button>
+    </div>
+
     <div class="history-modal" id="historyModal">
         <div class="history-header">
             <span id="levelBadge" class="level-badge level-0">All</span>
@@ -637,12 +686,25 @@
         });
 
         // ============ Live2D Overlay Controller ============
+        // Character rendering constants
+        const CHARACTER_SCALE_MULTIPLIER = 2.0;  // Shows "bust" view (upper body focused)
+        const CHARACTER_Y_POSITION = 1.02;        // Slightly below center for bust framing
+
         class Live2DOverlay {
             constructor() {
                 this.app = null;
                 this.model = null;
                 this.isInitialized = false;
-                this.bustMode = true;
+                this.originalModelWidth = 0;
+                this.originalModelHeight = 0;
+                this.characterScale = 1.0;  // User-adjustable character size within window
+                this.characterOffsetX = 0;  // Horizontal offset from center
+                this.characterOffsetY = 0;  // Vertical offset from default position
+                this.showOutline = false;
+                this.transformEditMode = false;
+                this.outlineGraphics = null;
+                this.dragState = null;  // null, 'move', or handle name like 'resize-br'
+                this.dragStart = null;  // Starting point and values for drag
             }
 
             initApp() {
@@ -651,10 +713,11 @@
                 const canvas = document.getElementById('live2dCanvas');
                 this.app = new PIXI.Application({
                     view: canvas,
-                    width: 400,
-                    height: 600,
+                    width: window.innerWidth,
+                    height: window.innerHeight,
                     backgroundAlpha: 0,
                     resolution: window.devicePixelRatio || 1,
+                    autoDensity: true,
                     antialias: true,
                     autoStart: false,
                 });
@@ -719,6 +782,11 @@
                     this.model = await Live2DModel.from(modelUrl, { autoInteract: false });
                     console.log('[Live2D] Model.from() completed');
 
+                    // Capture original model dimensions BEFORE any scaling
+                    this.originalModelWidth = this.model.width;
+                    this.originalModelHeight = this.model.height;
+                    console.log('[Live2D] Original model dimensions:', this.originalModelWidth, 'x', this.originalModelHeight);
+
                     this.app.stage.addChild(this.model);
                     this.resizeModel();
 
@@ -731,31 +799,195 @@
                 }
             }
 
-            // Sets scale and position based on fixed canvas dimensions
+            // Single source of truth for model scale/position calculation
+            updateModelTransform(canvasWidth, canvasHeight) {
+                if (!this.model || !this.originalModelWidth || !this.originalModelHeight) return;
+
+                // Calculate base scale to fit model in canvas
+                const baseScaleX = canvasWidth / this.originalModelWidth;
+                const baseScaleY = canvasHeight / this.originalModelHeight;
+                const baseScale = Math.min(baseScaleX, baseScaleY);
+
+                // Apply bust multiplier and user-adjustable character scale
+                const finalScale = baseScale * CHARACTER_SCALE_MULTIPLIER * this.characterScale;
+                this.model.scale.set(finalScale);
+
+                // Position model (centered with user offset, slightly below for bust framing)
+                this.model.x = canvasWidth / 2 + this.characterOffsetX;
+                this.model.y = canvasHeight * CHARACTER_Y_POSITION + this.characterOffsetY;
+                this.model.anchor.set(0.5, 0.5);
+
+                // Update outline if visible
+                this.renderOutline();
+            }
+
+            // Update model for current window dimensions
             resizeModel() {
-                if (!this.model) return;
+                this.updateModelTransform(window.innerWidth, window.innerHeight);
+            }
 
-                // Canvas is fixed at 400x600
-                const canvasWidth = 400;
-                const canvasHeight = 600;
+            // Resize PIXI canvas and update model
+            resizeCanvas(width, height) {
+                if (!this.app || !this.app.renderer) return;
+                this.app.renderer.resize(width, height);
+                this.updateModelTransform(width, height);
+            }
 
-                if (this.bustMode) {
-                    const baseScaleX = canvasWidth / this.model.width;
-                    const baseScaleY = canvasHeight / this.model.height;
-                    const baseScale = Math.min(baseScaleX, baseScaleY);
-                    const bustScale = baseScale * 2.0;
-                    this.model.scale.set(bustScale);
-                } else {
-                    const scaleX = canvasWidth / this.model.width;
-                    const scaleY = canvasHeight / this.model.height;
-                    const scale = Math.min(scaleX, scaleY) * 0.9;
-                    this.model.scale.set(scale);
+            // Initialize PIXI Graphics for outline rendering
+            initOutlineGraphics() {
+                if (!this.app || this.outlineGraphics) return;
+                this.outlineGraphics = new PIXI.Graphics();
+                this.app.stage.addChild(this.outlineGraphics);
+            }
+
+            // Render outline around the overlay window bounds
+            renderOutline() {
+                if (!this.outlineGraphics) {
+                    this.initOutlineGraphics();
+                }
+                if (!this.outlineGraphics) return;
+
+                this.outlineGraphics.clear();
+
+                const w = window.innerWidth;
+                const h = window.innerHeight;
+
+                // Draw cyan outline around canvas/window bounds (if outline enabled or in edit mode)
+                if (this.showOutline || this.transformEditMode) {
+                    const padding = 2;
+                    this.outlineGraphics.lineStyle(2, 0x00FFFF, 0.8);
+                    this.outlineGraphics.drawRect(padding, padding, w - padding * 2, h - padding * 2);
                 }
 
-                // Center in fixed canvas
-                this.model.x = canvasWidth / 2;
-                this.model.y = this.bustMode ? canvasHeight * 1.02 : canvasHeight;
-                this.model.anchor.set(0.5, 0.5);
+                // Draw resize handles and position indicator when in edit mode
+                if (this.transformEditMode) {
+                    const handleSize = 12;
+
+                    // Draw resize handles at corners and midpoints
+                    this.outlineGraphics.beginFill(0x00FFFF, 1);
+                    // Corners
+                    this.drawHandle(0, 0, handleSize);       // TopLeft
+                    this.drawHandle(w, 0, handleSize);       // TopRight
+                    this.drawHandle(0, h, handleSize);       // BottomLeft
+                    this.drawHandle(w, h, handleSize);       // BottomRight
+                    // Midpoints
+                    this.drawHandle(w / 2, 0, handleSize);   // Top
+                    this.drawHandle(w / 2, h, handleSize);   // Bottom
+                    this.drawHandle(0, h / 2, handleSize);   // Left
+                    this.drawHandle(w, h / 2, handleSize);   // Right
+                    this.outlineGraphics.endFill();
+
+                    // Draw anchor point (orange crosshair at model position)
+                    if (this.model) {
+                        const ax = this.model.x;
+                        const ay = this.model.y;
+                        this.outlineGraphics.lineStyle(2, 0xFF6600, 1);
+                        this.outlineGraphics.moveTo(ax - 12, ay);
+                        this.outlineGraphics.lineTo(ax + 12, ay);
+                        this.outlineGraphics.moveTo(ax, ay - 12);
+                        this.outlineGraphics.lineTo(ax, ay + 12);
+                        this.outlineGraphics.drawCircle(ax, ay, 6);
+                    }
+                }
+            }
+
+            // Helper to draw a square handle
+            drawHandle(x, y, size) {
+                this.outlineGraphics.drawRect(x - size / 2, y - size / 2, size, size);
+            }
+
+            // Setup mouse event handlers for transform editing
+            setupTransformHandlers() {
+                const canvas = document.getElementById('live2dCanvas');
+                canvas.addEventListener('mousedown', (e) => this.onTransformMouseDown(e));
+                canvas.addEventListener('mousemove', (e) => this.onTransformMouseMove(e));
+                canvas.addEventListener('mouseup', (e) => this.onTransformMouseUp(e));
+                canvas.addEventListener('mouseleave', (e) => this.onTransformMouseUp(e));
+            }
+
+            // Get which window resize handle (if any) is at the given point
+            getWindowHandleAtPoint(x, y) {
+                const handleSize = 16;  // Hit area for handles
+                const w = window.innerWidth;
+                const h = window.innerHeight;
+
+                // Window resize handles at corners and edges
+                const handles = [
+                    { name: 'TopLeft', x: 0, y: 0 },
+                    { name: 'TopRight', x: w, y: 0 },
+                    { name: 'BottomLeft', x: 0, y: h },
+                    { name: 'BottomRight', x: w, y: h },
+                    { name: 'Top', x: w / 2, y: 0 },
+                    { name: 'Bottom', x: w / 2, y: h },
+                    { name: 'Left', x: 0, y: h / 2 },
+                    { name: 'Right', x: w, y: h / 2 },
+                ];
+
+                for (const handle of handles) {
+                    if (Math.abs(x - handle.x) < handleSize && Math.abs(y - handle.y) < handleSize) {
+                        return handle.name;
+                    }
+                }
+                return null;
+            }
+
+            async onTransformMouseDown(e) {
+                if (!this.transformEditMode || !this.model) return;
+
+                const x = e.clientX;
+                const y = e.clientY;
+
+                // Check if clicking on a window resize handle
+                const resizeHandle = this.getWindowHandleAtPoint(x, y);
+                if (resizeHandle) {
+                    // Start window resize via Tauri
+                    e.preventDefault();
+                    const win = getCurrentWindow();
+                    await win.startResizing(resizeHandle);
+                    return;
+                }
+
+                // Otherwise, drag to move character position
+                this.dragState = 'move';
+                this.dragStart = {
+                    x, y,
+                    offsetX: this.characterOffsetX,
+                    offsetY: this.characterOffsetY
+                };
+                e.preventDefault();
+            }
+
+            onTransformMouseMove(e) {
+                if (!this.dragState || !this.transformEditMode) return;
+
+                const x = e.clientX;
+                const y = e.clientY;
+                const dx = x - this.dragStart.x;
+                const dy = y - this.dragStart.y;
+
+                // Move the character
+                this.characterOffsetX = this.dragStart.offsetX + dx;
+                this.characterOffsetY = this.dragStart.offsetY + dy;
+
+                this.resizeModel();
+            }
+
+            async onTransformMouseUp(e) {
+                if (this.dragState === 'move') {
+                    // Save config after drag ends
+                    try {
+                        await invoke('save_transform_config', {
+                            scale: this.characterScale,
+                            offsetX: this.characterOffsetX,
+                            offsetY: this.characterOffsetY
+                        });
+                        console.log('[Transform] Saved config after drag');
+                    } catch (err) {
+                        console.error('[Transform] Failed to save:', err);
+                    }
+                }
+                this.dragState = null;
+                this.dragStart = null;
             }
 
             getCoreModel() {
@@ -792,6 +1024,18 @@
 
                 console.log('[Overlay] Auto-loading model:', modelPath, modelFileName);
                 await live2dOverlay.loadModel(modelPath, modelFileName);
+
+                // Load saved transform config
+                try {
+                    const transformConfig = await invoke('load_transform_config');
+                    live2dOverlay.characterScale = transformConfig.scale;
+                    live2dOverlay.characterOffsetX = transformConfig.offset_x;
+                    live2dOverlay.characterOffsetY = transformConfig.offset_y;
+                    live2dOverlay.resizeModel();
+                    console.log('[Overlay] Loaded transform config:', transformConfig);
+                } catch (e) {
+                    console.log('[Overlay] No saved transform config, using defaults');
+                }
 
                 // Start device listening for head tracking
                 await invoke('start_device_listening');
@@ -834,6 +1078,60 @@
                 live2dOverlay.setParameter('ParamBodyAngleX', 0);
             }
         });
+
+        // Listen for transform edit toggle from settings
+        listen('toggle-transform-edit', (event) => {
+            live2dOverlay.transformEditMode = event.payload.enabled;
+
+            // Enable pointer events on canvas so drag handlers work
+            const canvas = document.getElementById('live2dCanvas');
+            canvas.style.pointerEvents = event.payload.enabled ? 'auto' : 'none';
+
+            // Show/hide scale controls
+            const scaleControls = document.getElementById('scaleControls');
+            scaleControls.classList.toggle('visible', event.payload.enabled);
+
+            live2dOverlay.renderOutline();
+        });
+
+        // Helper to save transform config
+        async function saveTransformConfig() {
+            try {
+                await invoke('save_transform_config', {
+                    scale: live2dOverlay.characterScale,
+                    offsetX: live2dOverlay.characterOffsetX,
+                    offsetY: live2dOverlay.characterOffsetY
+                });
+                console.log('[Transform] Saved config');
+            } catch (e) {
+                console.error('[Transform] Failed to save:', e);
+            }
+        }
+
+        // Scale button handlers
+        document.getElementById('scaleUpBtn').addEventListener('click', async () => {
+            live2dOverlay.characterScale = Math.min(2.0, live2dOverlay.characterScale + 0.1);
+            live2dOverlay.resizeModel();
+            await saveTransformConfig();
+        });
+
+        document.getElementById('scaleDownBtn').addEventListener('click', async () => {
+            live2dOverlay.characterScale = Math.max(0.25, live2dOverlay.characterScale - 0.1);
+            live2dOverlay.resizeModel();
+            await saveTransformConfig();
+        });
+
+        // Listen for transform reset from settings
+        listen('reset-character-transform', async () => {
+            live2dOverlay.characterScale = 1.0;
+            live2dOverlay.characterOffsetX = 0;
+            live2dOverlay.characterOffsetY = 0;
+            live2dOverlay.resizeModel();
+            await saveTransformConfig();
+        });
+
+        // Setup transform mouse handlers
+        live2dOverlay.setupTransformHandlers();
 
         // ============ Hitbox Editor ============
         const hitboxCanvas = document.getElementById('hitboxCanvas');
@@ -1031,8 +1329,12 @@
             }
         });
 
-        // Handle window resize - rescale hitbox canvas
+        // Handle window resize - rescale Live2D canvas and hitbox canvas
         window.addEventListener('resize', () => {
+            // Resize Live2D canvas to match window
+            live2dOverlay.resizeCanvas(window.innerWidth, window.innerHeight);
+
+            // Resize hitbox canvas if in edit/preview mode
             if (hitboxEditMode || hitboxPreviewMode) {
                 resizeHitboxCanvas();
                 renderHitboxOverlay();
@@ -1099,7 +1401,9 @@
             if (event.target.closest('.textbox-container')) return;
 
             // Only drag if inside polygon (or no polygon defined)
-            if (hitboxPoints.length < 3 || isPointInPolygon(event.clientX, event.clientY, hitboxPoints)) {
+            // AND not in transform edit mode
+            if (!live2dOverlay.transformEditMode &&
+                (hitboxPoints.length < 3 || isPointInPolygon(event.clientX, event.clientY, hitboxPoints))) {
                 const win = getCurrentWindow();
                 await win.startDragging();
             }

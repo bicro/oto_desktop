@@ -86,6 +86,11 @@ pub fn get_overlay_scale_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join(".overlay_scale"))
 }
 
+/// Gets the transform configuration file path
+pub fn get_transform_config_path() -> Result<PathBuf, String> {
+    get_app_data_dir().map(|p| p.join(".transform_config.json"))
+}
+
 /// Gets the texture directory path for a specific model
 pub fn get_texture_dir_for_model(
     model_folder: &str,

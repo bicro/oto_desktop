@@ -828,20 +828,20 @@
         <div class="section-content">
             <div class="form-row" style="align-items: center;">
                 <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                    <input type="checkbox" id="headTrackingToggle" checked style="width: 14px; height: 14px;">
+                    <input type="checkbox" id="headTrackingToggle" style="width: 14px; height: 14px;">
                     <span>Head tracking follows mouse</span>
                 </label>
             </div>
             <div class="form-hint" style="margin-top: 4px;">Character head will follow your cursor when enabled</div>
 
+            <!-- Character Transform -->
             <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
-                <div class="form-label">Character Size</div>
-                <div class="form-row" style="align-items: center; gap: 12px; margin-top: 8px;">
-                    <button class="btn btn-sm" id="zoomOutBtn" style="width: 32px; padding: 4px;">−</button>
-                    <span id="zoomLevelDisplay" style="min-width: 50px; text-align: center; font-size: 13px;">100%</span>
-                    <button class="btn btn-sm" id="zoomInBtn" style="width: 32px; padding: 4px;">+</button>
+                <div class="form-label">Character Transform</div>
+                <div class="form-row" style="align-items: center; gap: 8px; margin-top: 8px;">
+                    <button class="btn btn-sm" id="editTransformBtn">Edit</button>
+                    <button class="btn btn-outline btn-sm" id="resetTransformBtn">Reset</button>
                 </div>
-                <div class="form-hint" style="margin-top: 4px;">Scale the character window (50% - 200%)</div>
+                <div class="form-hint" style="margin-top: 4px;">Drag edges to resize window, +/- to scale character, drag to position</div>
             </div>
         </div>
     </div>
@@ -1329,42 +1329,20 @@
             await emit('head-tracking-changed', { enabled });
         });
 
-        // Character size (zoom) controls
-        const zoomLevelDisplay = document.getElementById('zoomLevelDisplay');
-        const zoomInBtn = document.getElementById('zoomInBtn');
-        const zoomOutBtn = document.getElementById('zoomOutBtn');
-        let currentScale = 1.0;
+        // Character transform controls
+        const editTransformBtn = document.getElementById('editTransformBtn');
+        const resetTransformBtn = document.getElementById('resetTransformBtn');
+        let transformEditMode = false;
 
-        async function loadOverlayScale() {
-            try {
-                currentScale = await invoke('get_overlay_scale');
-                zoomLevelDisplay.textContent = Math.round(currentScale * 100) + '%';
-            } catch (err) {
-                console.error('Failed to load overlay scale:', err);
-            }
-        }
-
-        async function updateOverlayScale(newScale) {
-            newScale = Math.max(0.5, Math.min(2.0, newScale));
-            try {
-                await invoke('resize_overlay', { scale: newScale });
-                currentScale = newScale;
-                zoomLevelDisplay.textContent = Math.round(currentScale * 100) + '%';
-            } catch (err) {
-                showToast('Failed to resize: ' + err, 'error');
-            }
-        }
-
-        zoomInBtn.addEventListener('click', () => {
-            updateOverlayScale(currentScale + 0.05);
+        editTransformBtn.addEventListener('click', () => {
+            transformEditMode = !transformEditMode;
+            editTransformBtn.textContent = transformEditMode ? 'Done' : 'Edit';
+            emit('toggle-transform-edit', { enabled: transformEditMode });
         });
 
-        zoomOutBtn.addEventListener('click', () => {
-            updateOverlayScale(currentScale - 0.05);
+        resetTransformBtn.addEventListener('click', () => {
+            emit('reset-character-transform', {});
         });
-
-        // Load initial scale
-        loadOverlayScale();
 
         // Spawn/Hide character
         spawnBtn.addEventListener('click', async () => {

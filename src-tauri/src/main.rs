@@ -155,6 +155,54 @@ fn save_model_config(config: &ModelConfig) -> Result<(), String> {
     std::fs::write(&config_path, content).map_err(|e| format!("Failed to save model config: {}", e))
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TransformConfig {
+    pub scale: f64,
+    pub offset_x: f64,
+    pub offset_y: f64,
+}
+
+impl Default for TransformConfig {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+        }
+    }
+}
+
+#[tauri::command]
+fn save_transform_config(scale: f64, offset_x: f64, offset_y: f64) -> Result<(), String> {
+    let config_path = paths::get_transform_config_path()?;
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+    let config = TransformConfig {
+        scale,
+        offset_x,
+        offset_y,
+    };
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize transform config: {}", e))?;
+    std::fs::write(&config_path, content)
+        .map_err(|e| format!("Failed to save transform config: {}", e))
+}
+
+#[tauri::command]
+fn load_transform_config() -> Result<TransformConfig, String> {
+    let config_path = paths::get_transform_config_path()?;
+    if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read transform config: {}", e))?;
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse transform config: {}", e))
+    } else {
+        Ok(TransformConfig::default())
+    }
+}
+
 /// Maximum depth to search for model files in nested directories
 const MAX_MODEL_SEARCH_DEPTH: u32 = 3;
 
@@ -405,6 +453,9 @@ async fn change_model(app: AppHandle, url: String) -> Result<ModelConfig, String
 
     println!("[change_model] Changing model to: {}", url);
 
+    // Reset zoom to 100% for new model
+    save_overlay_scale_to_file(1.0)?;
+
     // Emit progress
     let _ = app.emit(
         "model-change-progress",
@@ -443,6 +494,9 @@ async fn change_model(app: AppHandle, url: String) -> Result<ModelConfig, String
         "model-change-progress",
         json!({ "status": "complete", "message": "Model changed successfully!" }),
     );
+
+    // Notify frontend of scale reset
+    let _ = app.emit("overlay-scale-reset", json!({ "scale": 1.0 }));
 
     println!("[change_model] Model changed successfully: {:?}", config);
 
@@ -1668,20 +1722,24 @@ async fn resize_overlay(app: AppHandle, scale: f64) -> Result<(), String> {
     let scale = scale.clamp(0.5, 2.0);
 
     if let Some(window) = app.get_webview_window("overlay") {
-        let width = (paths::DEFAULT_OVERLAY_WIDTH * scale) as u32;
-        let height = (paths::DEFAULT_OVERLAY_HEIGHT * scale) as u32;
+        let width = paths::DEFAULT_OVERLAY_WIDTH * scale;
+        let height = paths::DEFAULT_OVERLAY_HEIGHT * scale;
 
-        // Resize the window
+        // Resize the window using logical size (works correctly on Retina displays)
         window
-            .set_size(tauri::Size::Physical(tauri::PhysicalSize { width, height }))
+            .set_size(tauri::Size::Logical(tauri::LogicalSize { width, height }))
             .map_err(|e| format!("Failed to resize overlay: {}", e))?;
 
         // Reposition to bottom right
         if let Ok(Some(monitor)) = window.current_monitor() {
+            let scale_factor = monitor.scale_factor();
             let screen_size = monitor.size();
             let screen_pos = monitor.position();
-            let x = screen_pos.x + (screen_size.width as i32) - (width as i32);
-            let y = screen_pos.y + (screen_size.height as i32) - (height as i32);
+            // Convert logical width/height to physical for position calculation
+            let physical_width = (width * scale_factor) as i32;
+            let physical_height = (height * scale_factor) as i32;
+            let x = screen_pos.x + (screen_size.width as i32) - physical_width;
+            let y = screen_pos.y + (screen_size.height as i32) - physical_height;
             let _ =
                 window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
         }
@@ -2277,6 +2335,8 @@ fn main() {
             save_hitbox,
             load_hitbox,
             clear_hitbox,
+            save_transform_config,
+            load_transform_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
