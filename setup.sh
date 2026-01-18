@@ -101,13 +101,37 @@ for dep in "${MISSING[@]}"; do
             fi ;;
         linux-deps)
             if prompt "Linux system dependencies (required for Tauri)"; then
+
+        # checks for pacman package manager!
+        if 
+            command -v pacman &>/dev/null; then
+                sudo pacman -Syu --noconfirm --needed pkgconf openssl libx11 \
+                libxrandr libxinerama libxcursor libxi libxext \
+                atk gtk3 webkit2gtk libsoup \
+                glib2 gnome-screenshot       
+        #checks for apt-get
+        elif
+            command -v apt-get &>/dev/null;then
+
                 sudo apt-get update && sudo apt-get install -y \
-                    pkg-config libssl-dev libx11-dev libxdo-dev libxcb1-dev libxrandr-dev \
-                    libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
-                    libatk1.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
-                    libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libglib2.0-dev \
-                    libayatana-appindicator3-dev libayatana-appindicator3-1 \
-                    gnome-screenshot
+                pkg-config libssl-dev libx11-dev libxdo-dev libxcb1-dev libxrandr-dev \
+                libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
+                libatk1.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+                libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libglib2.0-dev \
+                libayatana-appindicator3-dev gnome-screenshot
+
+                #checks for dnf
+        elif 
+            command -v dnf &>/dev/null; then
+                sudo dnf install -y \
+                pkgconf-pkg-config openssl-devel libX11-devel libXrandr-devel \
+                libXinerama-devel libXcursor-devel libXi-devel libXext-devel \
+                atk-devel gtk3-devel webkit2gtk3-devel \
+                javascriptcoregtk3-devel libsoup3-devel glib2-devel \
+                libayatana-appindicator3-devel gnome-screenshot
+                fi
+
+# huge thanks to my friend mizufuwa from a different place for help writing the above! :3
             fi ;;
     esac
 done
