@@ -35,7 +35,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cubism.live2d.com; style-src 'self' 'unsafe-inline'; img-src 'self' asset: localfile: http://localfile.localhost https: data: blob:; connect-src 'self' http://asset.localhost http://localfile.localhost https://api.openai.com https://storage.googleapis.com; worker-src 'self' blob:; font-src 'self' data:",
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cubism.live2d.com; style-src 'self' 'unsafe-inline'; img-src 'self' asset: localfile: http://localfile.localhost https: data: blob:; connect-src 'self' asset: http://asset.localhost http://localfile.localhost https://api.openai.com https://storage.googleapis.com; worker-src 'self' blob:; font-src 'self' data:",
       "assetProtocol": {
         "enable": true,
         "scope": {
