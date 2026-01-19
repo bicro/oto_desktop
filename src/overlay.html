@@ -324,32 +324,6 @@
             padding: 2px 6px;
         }
 
-        .level-badge {
-            display: inline-block;
-            padding: 3px 12px;
-            border-radius: 16px;
-            font-size: 11px;
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            transition: all 0.3s ease;
-        }
-
-        .level-badge.level-0 {
-            background: rgba(255, 255, 255, 0.15);
-            color: rgba(255, 255, 255, 0.9);
-        }
-
-        .level-badge.level-1 {
-            background: rgba(57, 197, 187, 0.25);
-            color: #39c5bb;
-        }
-
-        .level-badge.level-2 {
-            background: rgba(138, 43, 226, 0.25);
-            color: #dda0dd;
-        }
-
         .history-content {
             flex: 1;
             overflow-y: auto;
@@ -452,31 +426,43 @@
             padding: 40px;
         }
 
-        /* Level indicator */
-        .level-indicator {
-            position: fixed;
-            bottom: 100px;
-            left: 50%;
-            transform: translateX(-50%);
-            display: none;
-            gap: 8px;
-            z-index: 2600;
-            font-family: monospace;
-        }
-
-        .level-indicator.visible {
+        /* Chat tabs in header */
+        .chat-tabs {
             display: flex;
+            gap: 4px;
         }
 
-        .level-indicator .dash {
-            font-size: 18px;
-            color: rgba(255, 255, 255, 0.3);
+        .chat-tab {
+            padding: 4px 12px;
+            border: none;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
             transition: all 0.2s ease;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
 
-        .level-indicator .dash.active {
+        .chat-tab:hover {
+            background: rgba(255, 255, 255, 0.2);
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .chat-tab.active {
+            background: rgba(255, 255, 255, 0.25);
             color: white;
-            text-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+        }
+
+        .chat-tab.tab-character.active {
+            background: rgba(57, 197, 187, 0.3);
+            color: #39c5bb;
+        }
+
+        .chat-tab.tab-deep.active {
+            background: rgba(138, 43, 226, 0.3);
+            color: #dda0dd;
         }
 
 
@@ -499,11 +485,6 @@
 
     <div class="status-indicator" id="statusIndicator"></div>
 
-    <div class="level-indicator" id="levelIndicator">
-        <span class="dash active" data-level="0">─</span>
-        <span class="dash" data-level="1">─</span>
-        <span class="dash" data-level="2">─</span>
-    </div>
 
     <!-- Scale controls (visible in transform edit mode) -->
     <div class="scale-controls" id="scaleControls">
@@ -514,7 +495,11 @@
     <div class="chat-panel" id="chatPanel">
         <div class="chat-history" id="historyModal">
             <div class="history-header">
-                <span id="levelBadge" class="level-badge level-0">All</span>
+                <div class="chat-tabs">
+                    <button class="chat-tab tab-all active" data-level="0">All</button>
+                    <button class="chat-tab tab-character" data-level="1">Character</button>
+                    <button class="chat-tab tab-deep" data-level="2">Deep Think</button>
+                </div>
                 <button id="closeHistoryBtn">&#x2715;</button>
             </div>
             <div class="history-content" id="historyContent"></div>
@@ -1608,30 +1593,13 @@
         }
 
         /**
-         * Updates the level indicator dashes and badge
+         * Updates the active state of chat tabs
          */
         function updateLevelIndicator() {
-            const indicator = document.getElementById('levelIndicator');
-            indicator.querySelectorAll('.dash').forEach((dash, i) => {
-                dash.classList.toggle('active', i === AppState.historyFilterLevel);
+            document.querySelectorAll('.chat-tab').forEach(tab => {
+                const level = parseInt(tab.getAttribute('data-level'), 10);
+                tab.classList.toggle('active', level === AppState.historyFilterLevel);
             });
-
-            // Update level badge
-            const badge = document.getElementById('levelBadge');
-            if (badge) {
-                badge.textContent = LEVEL_LABELS[AppState.historyFilterLevel];
-                badge.className = `level-badge level-${AppState.historyFilterLevel}`;
-            }
-        }
-
-        function showLevelIndicator() {
-            const indicator = document.getElementById('levelIndicator');
-            indicator.classList.add('visible');
-        }
-
-        function hideLevelIndicator() {
-            const indicator = document.getElementById('levelIndicator');
-            indicator.classList.remove('visible');
         }
 
         // Cooldown timer functions (state stored in AppState)
@@ -1873,7 +1841,6 @@
                 if (!isHistoryOpen) {
                     historyModal.classList.add('visible');
                     document.getElementById('historyBtn').classList.add('active');
-                    showLevelIndicator();
                     updateLevelIndicator();
                 }
 
@@ -2004,7 +1971,6 @@
             historyModal.classList.add('visible');
             document.getElementById('historyBtn').classList.add('active');
             await loadChatHistory();
-            showLevelIndicator();
             updateLevelIndicator();
             applyHistoryFilter(); // Apply filter based on current level (0 on re-open)
             // Scroll to bottom after everything is loaded
@@ -2019,7 +1985,7 @@
             historyContent.querySelectorAll('.focused').forEach(el => el.classList.remove('focused'));
             // Reset filter state of all messages
             historyContent.querySelectorAll('.history-message').forEach(msg => msg.classList.remove('filtered'));
-            hideLevelIndicator();
+            updateLevelIndicator(); // Reset tabs to show "All" as active
             clearCooldownTimer();
             // Reset input styling
             chatPanel.classList.remove('level-2');
@@ -2030,6 +1996,27 @@
         document.getElementById('closeHistoryBtn').onclick = () => {
             hideHistoryModal();
         };
+
+        // Tab click handlers
+        document.querySelectorAll('.chat-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const newLevel = parseInt(tab.getAttribute('data-level'), 10);
+                if (newLevel === AppState.historyFilterLevel) return;
+
+                // Clear cooldown if leaving level 2
+                if (AppState.historyFilterLevel === 2) {
+                    clearCooldownTimer();
+                }
+
+                AppState.historyFilterLevel = newLevel;
+                AppState.historyFocusIndex = -1;
+                loadChatHistory().then(() => {
+                    applyHistoryFilter();
+                    chatInput.focus();
+                    updateScreenshotVisual();
+                });
+            });
+        });
 
         // History button to open/close chat history
         document.getElementById('historyBtn').onclick = () => {
