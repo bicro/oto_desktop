@@ -113,25 +113,6 @@
             transform: translateY(0);
         }
 
-        .shortcut-tip {
-            position: absolute;
-            top: -24px;
-            left: 50%;
-            transform: translateX(-50%);
-            font-size: 11px;
-            color: rgba(255, 255, 255, 0.5);
-            background: rgba(0, 0, 0, 0.6);
-            padding: 3px 10px;
-            border-radius: 10px;
-            pointer-events: none;
-            transition: opacity 0.2s ease;
-        }
-
-        .chat-history.visible ~ .chat-input-bar .shortcut-tip,
-        .chat-input-bar:focus-within .shortcut-tip {
-            opacity: 0;
-        }
-
         .chat-input-bar input {
             flex: 1;
             padding: 8px 14px;
@@ -265,6 +246,33 @@
 
         .scale-btn:active {
             transform: scale(0.95);
+        }
+
+        .scale-separator {
+            width: 24px;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.2);
+            margin: 4px 0;
+        }
+
+        .scale-btn.reset-btn {
+            background: rgba(255, 150, 50, 0.3);
+        }
+
+        .scale-btn.reset-btn:hover {
+            background: rgba(255, 150, 50, 0.5);
+        }
+
+        .scale-btn.confirm-btn {
+            background: rgba(76, 175, 80, 0.3);
+        }
+
+        .scale-btn.confirm-btn:hover {
+            background: rgba(76, 175, 80, 0.5);
+        }
+
+        .scale-btn svg {
+            display: block;
         }
 
         .status-indicator {
@@ -474,6 +482,67 @@
             margin: 0 10%;
         }
 
+        /* Context menu */
+        .context-menu {
+            position: fixed;
+            background: rgba(30, 30, 30, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 4px 0;
+            min-width: 160px;
+            z-index: 3000;
+            display: none;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            -webkit-app-region: no-drag;
+            pointer-events: auto;
+        }
+
+        .context-menu.visible {
+            display: block;
+        }
+
+        .context-menu-item {
+            padding: 8px 14px;
+            color: white;
+            font-size: 13px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: background 0.15s ease;
+        }
+
+        .context-menu-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .context-menu-item.danger:hover {
+            background: rgba(239, 68, 68, 0.3);
+        }
+
+        .context-menu-item.active {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .context-menu-item.active::after {
+            content: '✓';
+            margin-left: auto;
+            opacity: 0.7;
+        }
+
+        .context-menu-separator {
+            height: 1px;
+            background: rgba(255, 255, 255, 0.1);
+            margin: 4px 0;
+        }
+
+        .context-menu-item svg {
+            width: 16px;
+            height: 16px;
+            opacity: 0.8;
+        }
+
     </style>
 </head>
 <body>
@@ -486,10 +555,17 @@
     <div class="status-indicator" id="statusIndicator"></div>
 
 
-    <!-- Scale controls (visible in transform edit mode) -->
+    <!-- Transform controls (visible in transform edit mode) -->
     <div class="scale-controls" id="scaleControls">
         <button class="scale-btn" id="scaleUpBtn" title="Increase Size">+</button>
-        <button class="scale-btn" id="scaleDownBtn" title="Decrease Size">-</button>
+        <button class="scale-btn" id="scaleDownBtn" title="Decrease Size">−</button>
+        <div class="scale-separator"></div>
+        <button class="scale-btn reset-btn" id="resetTransformBtn" title="Reset Transform">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+        </button>
+        <button class="scale-btn confirm-btn" id="confirmTransformBtn" title="Confirm & Exit">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+        </button>
     </div>
 
     <div class="chat-panel" id="chatPanel">
@@ -505,14 +581,42 @@
             <div class="history-content" id="historyContent"></div>
         </div>
         <div class="chat-input-bar">
-            <span class="shortcut-tip">Alt + Space</span>
-            <input type="text" id="chatInput" placeholder="Type a message..." autocomplete="off" />
+            <input type="text" id="chatInput" placeholder="[Alt + Space] to type..." autocomplete="off" />
             <button class="control-btn chat-icon" id="historyBtn" title="Chat History">
                 <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
                     <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.2L4 17.2V4h16v12z"/>
                 </svg>
             </button>
-            <button class="control-btn" id="settingsBtn" title="Settings">&#x2699;</button>
+        </div>
+    </div>
+
+    <!-- Context Menu -->
+    <div class="context-menu" id="contextMenu">
+        <div class="context-menu-item" id="menuSettings" data-action="settings">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            Settings
+        </div>
+        <div class="context-menu-item" id="menuChat" data-action="chat">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.2L4 17.2V4h16v12z"/></svg>
+            Chat History
+        </div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-item" id="menuTransform" data-action="edit-transform">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5v4h2V5h4V3H5c-1.1 0-2 .9-2 2zm2 10H3v4c0 1.1.9 2 2 2h4v-2H5v-4zm14 4h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4zm0-16h-4v2h4v4h2V5c0-1.1-.9-2-2-2z"/></svg>
+            Edit Transform
+        </div>
+        <div class="context-menu-item" data-action="toggle-tracking">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+            <span id="trackingLabel">Disable Head Tracking</span>
+        </div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-item" data-action="hide">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>
+            Hide Character
+        </div>
+        <div class="context-menu-item danger" data-action="quit">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            Quit
         </div>
     </div>
 
@@ -539,7 +643,7 @@
         const isWindows = !isMac && !isLinux;
 
         function updateTooltips() {
-            document.getElementById('settingsBtn').dataset.tooltip = 'Settings';
+            // Tooltips updated as needed
         }
 
         let currentBasePath = null;
@@ -1114,6 +1218,33 @@
             await saveTransformConfig();
         });
 
+        // Reset transform button - reset to defaults
+        document.getElementById('resetTransformBtn').addEventListener('click', async () => {
+            live2dOverlay.characterScale = 1.0;
+            live2dOverlay.characterOffsetX = 0;
+            live2dOverlay.characterOffsetY = 0;
+            live2dOverlay.resizeModel();
+            await saveTransformConfig();
+        });
+
+        // Confirm transform button - save and exit edit mode
+        document.getElementById('confirmTransformBtn').addEventListener('click', async () => {
+            await saveTransformConfig();
+
+            // Exit transform edit mode
+            live2dOverlay.transformEditMode = false;
+
+            // Disable pointer events on canvas
+            const canvas = document.getElementById('live2dCanvas');
+            canvas.style.pointerEvents = 'none';
+
+            // Hide scale controls
+            const scaleControls = document.getElementById('scaleControls');
+            scaleControls.classList.remove('visible');
+
+            live2dOverlay.renderOutline();
+        });
+
         // Listen for transform reset from settings
         listen('reset-character-transform', async () => {
             live2dOverlay.characterScale = 1.5;
@@ -1311,15 +1442,157 @@
             }
         });
 
-        // Right-click to undo last point
-        document.addEventListener('contextmenu', (e) => {
+        // Right-click context menu
+        const contextMenu = document.getElementById('contextMenu');
+
+        async function showContextMenu(x, y) {
+            // Update tracking label based on current state
+            const trackingLabel = document.getElementById('trackingLabel');
+            trackingLabel.textContent = AppState.headTrackingEnabled ? 'Disable Head Tracking' : 'Enable Head Tracking';
+
+            // Update active states for toggles
+            const menuSettings = document.getElementById('menuSettings');
+            const menuChat = document.getElementById('menuChat');
+
+            // Check if settings window is visible
+            try {
+                const isSettingsVisible = await invoke('is_main_window_visible');
+                menuSettings.classList.toggle('active', isSettingsVisible);
+            } catch (e) {
+                menuSettings.classList.remove('active');
+            }
+
+            // Check if chat history is visible
+            const isChatVisible = historyModal.classList.contains('visible');
+            menuChat.classList.toggle('active', isChatVisible);
+
+            // Check if transform edit mode is active
+            const menuTransform = document.getElementById('menuTransform');
+            menuTransform.classList.toggle('active', live2dOverlay.transformEditMode);
+
+            // Position menu, keeping it within viewport
+            const menuWidth = 160;
+            const menuHeight = contextMenu.offsetHeight || 250;
+            const maxX = window.innerWidth - menuWidth - 5;
+            const maxY = window.innerHeight - menuHeight - 5;
+
+            contextMenu.style.left = Math.min(x, maxX) + 'px';
+            contextMenu.style.top = Math.min(y, maxY) + 'px';
+            contextMenu.classList.add('visible');
+        }
+
+        function hideContextMenu() {
+            contextMenu.classList.remove('visible');
+        }
+
+        // Handle context menu item clicks
+        contextMenu.addEventListener('click', async (e) => {
+            const item = e.target.closest('.context-menu-item');
+            if (!item) return;
+
+            const action = item.dataset.action;
+            hideContextMenu();
+
+            switch (action) {
+                case 'settings':
+                    await invoke('toggle_main_window');
+                    break;
+                case 'chat':
+                    // Toggle chat history
+                    if (historyModal.classList.contains('visible')) {
+                        hideHistoryModal();
+                    } else {
+                        showHistoryModal();
+                    }
+                    break;
+                case 'edit-transform':
+                    // Toggle transform edit mode
+                    live2dOverlay.transformEditMode = !live2dOverlay.transformEditMode;
+
+                    // Enable pointer events on canvas so drag handlers work
+                    const canvas = document.getElementById('live2dCanvas');
+                    canvas.style.pointerEvents = live2dOverlay.transformEditMode ? 'auto' : 'none';
+
+                    // Show/hide scale controls
+                    const scaleControls = document.getElementById('scaleControls');
+                    scaleControls.classList.toggle('visible', live2dOverlay.transformEditMode);
+
+                    live2dOverlay.renderOutline();
+                    break;
+                case 'toggle-tracking':
+                    AppState.headTrackingEnabled = !AppState.headTrackingEnabled;
+                    localStorage.setItem('headTrackingEnabled', AppState.headTrackingEnabled);
+                    if (!AppState.headTrackingEnabled) {
+                        live2dOverlay.setParameter('ParamAngleX', 0);
+                        live2dOverlay.setParameter('ParamAngleY', 0);
+                        live2dOverlay.setParameter('ParamBodyAngleX', 0);
+                    }
+                    break;
+                case 'hide':
+                    await invoke('hide_overlay');
+                    break;
+                case 'quit':
+                    // Use Tauri's process exit if available, otherwise close window
+                    try {
+                        if (window.__TAURI__.process?.exit) {
+                            await window.__TAURI__.process.exit(0);
+                        } else {
+                            // Fallback: close the window
+                            await getCurrentWindow().close();
+                        }
+                    } catch (e) {
+                        await getCurrentWindow().close();
+                    }
+                    break;
+            }
+        });
+
+        // Hide context menu on click outside
+        document.addEventListener('click', (e) => {
+            if (!contextMenu.contains(e.target)) {
+                hideContextMenu();
+            }
+        });
+
+        // Hide context menu on escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && contextMenu.classList.contains('visible')) {
+                hideContextMenu();
+                e.stopPropagation();
+            }
+        });
+
+        // Hide context menu when window loses focus (clicking outside the app)
+        window.addEventListener('blur', () => {
+            hideContextMenu();
+        });
+
+        document.addEventListener('contextmenu', async (e) => {
+            // Hitbox edit mode: undo last point
             if (hitboxEditMode) {
                 e.preventDefault();
                 if (hitboxPoints.length > 0) {
                     hitboxPoints.pop();
                     renderHitboxOverlay();
                 }
+                return;
             }
+
+            // Don't show context menu on chat panel
+            if (e.target.closest('.chat-panel')) {
+                return;
+            }
+
+            // If right-clicking on the context menu itself, just close it
+            if (e.target.closest('.context-menu')) {
+                e.preventDefault();
+                hideContextMenu();
+                return;
+            }
+
+            // Show custom context menu
+            e.preventDefault();
+            await showContextMenu(e.clientX, e.clientY);
         });
 
         // Handle window resize - rescale Live2D canvas and hitbox canvas
@@ -1336,10 +1609,6 @@
 
 
         // ============ Control Buttons ============
-        document.getElementById('settingsBtn').onclick = async () => {
-            const isNowVisible = await invoke('toggle_main_window');
-            document.getElementById('settingsBtn').classList.toggle('active', isNowVisible);
-        };
 
         // Listen for hitbox edit event from settings page
         listen('enter-hitbox-edit', () => {
@@ -1374,6 +1643,11 @@
         });
 
         document.body.addEventListener('mousedown', async (event) => {
+            // Hide context menu on any click outside of it
+            if (!event.target.closest('.context-menu')) {
+                hideContextMenu();
+            }
+
             // Handle hitbox editing clicks
             if (hitboxEditMode) {
                 if (!event.target.closest('.chat-panel')) {
@@ -1382,8 +1656,10 @@
                 return;
             }
 
+            // Don't interfere with UI elements
             if (event.target.closest('.chat-panel')) return;
             if (event.target.closest('.textbox-container')) return;
+            if (event.target.closest('.context-menu')) return;
 
             // Only drag if inside polygon (or no polygon defined)
             // AND not in transform edit mode
@@ -2103,20 +2379,8 @@
             // Initialize hitbox canvas (but keep hidden)
             resizeHitboxCanvas();
 
-            // Check if main window (settings) is already visible and update settings button state
-            try {
-                const isMainVisible = await invoke('is_main_window_visible');
-                document.getElementById('settingsBtn').classList.toggle('active', isMainVisible);
-            } catch (e) {
-                frontendLog('info', '[Overlay] Could not check main window visibility:', e);
-            }
         });
 
-        // Listen for main window visibility changes
-        listen('main-window-visibility-changed', (event) => {
-            const isVisible = event.payload.visible;
-            document.getElementById('settingsBtn').classList.toggle('active', isVisible);
-        });
     </script>
 </body>
 </html>
