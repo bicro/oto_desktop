@@ -1143,7 +1143,7 @@ async fn send_chat_message_stream(
         let include_msg = match context_level {
             1 => msg.role == "user" || msg.role == "character" || msg.role == "assistant",
             2 => msg.role == "user" || msg.role == "deep-thought",
-            _ => msg.role != "deep-thought",
+            _ => msg.role != "deep-thought" && msg.role != "character",
         };
 
         if !include_msg {
@@ -1273,75 +1273,6 @@ async fn send_chat_message_stream(
         "context_level": context_level,
         "full_content": full_content.clone()
     }));
-
-    // For level 0, also stream character comments
-    if context_level == 0 && !full_content.is_empty() {
-        let char_system_prompt = get_character_prompt().await?;
-
-        let char_messages: Vec<Value> = vec![
-            json!({ "role": "system", "content": char_system_prompt }),
-            json!({ "role": "user", "content": format!("Here is the AI response to comment on:\n\n{}", full_content) }),
-        ];
-
-        let char_response = client
-            .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&json!({
-                "model": "gpt-4.1-2025-04-14",
-                "messages": char_messages,
-                "max_tokens": 500,
-                "stream": true
-            }))
-            .send()
-            .await;
-
-        if let Ok(resp) = char_response {
-            if resp.status().is_success() {
-                let mut char_stream = resp.bytes_stream();
-                let mut char_content = String::new();
-                let mut char_buffer = String::new();
-
-                while let Some(chunk_result) = char_stream.next().await {
-                    if let Ok(chunk) = chunk_result {
-                        let chunk_str = String::from_utf8_lossy(&chunk);
-                        char_buffer.push_str(&chunk_str);
-
-                        while let Some(line_end) = char_buffer.find('\n') {
-                            let line = char_buffer[..line_end].trim().to_string();
-                            char_buffer = char_buffer[line_end + 1..].to_string();
-
-                            if line.is_empty() || line == "data: [DONE]" {
-                                continue;
-                            }
-
-                            if let Some(json_str) = line.strip_prefix("data: ") {
-                                if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
-                                    if let Some(content) = json_value["choices"][0]["delta"]["content"].as_str() {
-                                        char_content.push_str(content);
-                                        let _ = app.emit("chat-stream-chunk", json!({
-                                            "chunk": content,
-                                            "role": "character",
-                                            "context_level": 0
-                                        }));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if !char_content.is_empty() {
-                    store_chat_message(&timestamp, "character", &char_content, 0)?;
-                    let _ = app.emit("chat-stream-done", json!({
-                        "role": "character",
-                        "context_level": 0,
-                        "full_content": char_content
-                    }));
-                }
-            }
-        }
-    }
 
     Ok(())
 }
