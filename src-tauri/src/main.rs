@@ -27,6 +27,7 @@ use tauri::{command, AppHandle, Emitter, Manager};
 use tauri::http::Response;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 // rusqlite is now used in db.rs module
+use futures_util::StreamExt;
 use log::{error, info, warn};
 use serde::Deserialize;
 
@@ -887,8 +888,6 @@ async fn send_chat_message(
     include_screenshot: bool,
     context_level: u8,
 ) -> Result<ChatResponse, String> {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-
     // Get API key
     let api_key = get_api_key()
         .await?
@@ -910,12 +909,9 @@ async fn send_chat_message(
         }
     };
 
-    // Take screenshot if enabled (only for level 0)
+    // Take screenshot if enabled (only for level 0) - uses fast in-memory encoding
     let screenshot_base64 = if include_screenshot && context_level == 0 {
-        let screenshot_path = take_screenshot(app).await?;
-        let screenshot_bytes = std::fs::read(&screenshot_path)
-            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
-        Some(BASE64.encode(&screenshot_bytes))
+        Some(take_screenshot_base64(app).await?)
     } else {
         None
     };
@@ -991,7 +987,7 @@ async fn send_chat_message(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": format!("data:image/png;base64,{}", base64)
+                        "url": format!("data:image/jpeg;base64,{}", base64)
                     }
                 }
             ]
@@ -1105,6 +1101,249 @@ async fn send_chat_message(
         main_response,
         character_comments,
     })
+}
+
+#[command]
+async fn send_chat_message_stream(
+    app: AppHandle,
+    message: String,
+    include_screenshot: bool,
+    context_level: u8,
+) -> Result<(), String> {
+    // Get API key
+    let api_key = get_api_key()
+        .await?
+        .ok_or_else(|| "API key not configured".to_string())?;
+
+    // Get system prompt based on level
+    let system_prompt = match context_level {
+        1 => get_dialogue_prompt().await?,
+        2 => get_deep_research_prompt().await?,
+        _ => get_system_prompt().await?,
+    };
+
+    // Take screenshot if enabled (only for level 0) - uses fast in-memory encoding
+    let screenshot_base64 = if include_screenshot && context_level == 0 {
+        Some(take_screenshot_base64(app.clone()).await?)
+    } else {
+        None
+    };
+
+    // Get recent chat history for context
+    let history = get_chat_history_internal(10)?;
+
+    // Build messages array with system prompt
+    let mut messages: Vec<Value> = vec![json!({
+        "role": "system",
+        "content": system_prompt
+    })];
+
+    // Add past messages for context, filtered by level
+    for msg in &history {
+        let include_msg = match context_level {
+            1 => msg.role == "user" || msg.role == "character" || msg.role == "assistant",
+            2 => msg.role == "user" || msg.role == "deep-thought",
+            _ => msg.role != "deep-thought",
+        };
+
+        if !include_msg {
+            continue;
+        }
+
+        let (role, content) = if msg.role == "character" {
+            if context_level == 1 {
+                ("assistant", format!("[Character's Inner Thoughts]: {}", msg.content))
+            } else {
+                ("assistant", format!("[Character]: {}", msg.content))
+            }
+        } else if msg.role == "assistant" && context_level == 1 {
+            ("assistant", format!("[AI Assistant Response]: {}", msg.content))
+        } else if msg.role == "deep-thought" {
+            ("assistant", format!("[Analysis]: {}", msg.content))
+        } else {
+            (msg.role.as_str(), msg.content.clone())
+        };
+
+        messages.push(json!({
+            "role": role,
+            "content": content
+        }));
+    }
+
+    // Add current message (with or without screenshot)
+    if let Some(ref base64) = screenshot_base64 {
+        messages.push(json!({
+            "role": "user",
+            "content": [
+                { "type": "text", "text": message.clone() },
+                { "type": "image_url", "image_url": { "url": format!("data:image/jpeg;base64,{}", base64) } }
+            ]
+        }));
+    } else {
+        messages.push(json!({
+            "role": "user",
+            "content": message.clone()
+        }));
+    }
+
+    // Store user message
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    store_chat_message(&timestamp, "user", &message, context_level)?;
+
+    // Determine the role for this context level
+    let response_role = match context_level {
+        1 => "character",
+        2 => "deep-thought",
+        _ => "assistant",
+    };
+
+    // Call OpenAI API with streaming
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&json!({
+            "model": "gpt-4.1-2025-04-14",
+            "messages": messages,
+            "max_tokens": 1000,
+            "stream": true
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("API request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.unwrap_or_default();
+        let _ = app.emit("chat-stream-error", json!({ "error": error_text }));
+        return Err(format!("API error: {}", error_text));
+    }
+
+    // Stream the response
+    let mut stream = response.bytes_stream();
+    let mut full_content = String::new();
+    let mut buffer = String::new();
+
+    while let Some(chunk_result) = stream.next().await {
+        match chunk_result {
+            Ok(chunk) => {
+                let chunk_str = String::from_utf8_lossy(&chunk);
+                buffer.push_str(&chunk_str);
+
+                // Process complete SSE lines from buffer
+                while let Some(line_end) = buffer.find('\n') {
+                    let line = buffer[..line_end].trim().to_string();
+                    buffer = buffer[line_end + 1..].to_string();
+
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    if line == "data: [DONE]" {
+                        break;
+                    }
+
+                    if let Some(json_str) = line.strip_prefix("data: ") {
+                        if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
+                            if let Some(content) = json_value["choices"][0]["delta"]["content"].as_str() {
+                                full_content.push_str(content);
+                                let _ = app.emit("chat-stream-chunk", json!({
+                                    "chunk": content,
+                                    "role": response_role,
+                                    "context_level": context_level
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = app.emit("chat-stream-error", json!({ "error": e.to_string() }));
+                return Err(format!("Stream error: {}", e));
+            }
+        }
+    }
+
+    // Store the complete response
+    store_chat_message(&timestamp, response_role, &full_content, context_level)?;
+
+    // Emit completion event
+    let _ = app.emit("chat-stream-done", json!({
+        "role": response_role,
+        "context_level": context_level,
+        "full_content": full_content.clone()
+    }));
+
+    // For level 0, also stream character comments
+    if context_level == 0 && !full_content.is_empty() {
+        let char_system_prompt = get_character_prompt().await?;
+
+        let char_messages: Vec<Value> = vec![
+            json!({ "role": "system", "content": char_system_prompt }),
+            json!({ "role": "user", "content": format!("Here is the AI response to comment on:\n\n{}", full_content) }),
+        ];
+
+        let char_response = client
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&json!({
+                "model": "gpt-4.1-2025-04-14",
+                "messages": char_messages,
+                "max_tokens": 500,
+                "stream": true
+            }))
+            .send()
+            .await;
+
+        if let Ok(resp) = char_response {
+            if resp.status().is_success() {
+                let mut char_stream = resp.bytes_stream();
+                let mut char_content = String::new();
+                let mut char_buffer = String::new();
+
+                while let Some(chunk_result) = char_stream.next().await {
+                    if let Ok(chunk) = chunk_result {
+                        let chunk_str = String::from_utf8_lossy(&chunk);
+                        char_buffer.push_str(&chunk_str);
+
+                        while let Some(line_end) = char_buffer.find('\n') {
+                            let line = char_buffer[..line_end].trim().to_string();
+                            char_buffer = char_buffer[line_end + 1..].to_string();
+
+                            if line.is_empty() || line == "data: [DONE]" {
+                                continue;
+                            }
+
+                            if let Some(json_str) = line.strip_prefix("data: ") {
+                                if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
+                                    if let Some(content) = json_value["choices"][0]["delta"]["content"].as_str() {
+                                        char_content.push_str(content);
+                                        let _ = app.emit("chat-stream-chunk", json!({
+                                            "chunk": content,
+                                            "role": "character",
+                                            "context_level": 0
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !char_content.is_empty() {
+                    store_chat_message(&timestamp, "character", &char_content, 0)?;
+                    let _ = app.emit("chat-stream-done", json!({
+                        "role": "character",
+                        "context_level": 0,
+                        "full_content": char_content
+                    }));
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 // Database helper functions (store_chat_message, get_chat_history_internal) are in db.rs
@@ -2046,7 +2285,7 @@ async fn take_screenshot(app: AppHandle) -> Result<String, String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("Time error: {}", e))?
         .as_millis();
-    let filename = format!("{:x}.png", timestamp);
+    let filename = format!("{:x}.jpg", timestamp);
 
     // Get screenshots directory and create if needed
     let screenshots_dir = get_screenshots_dir()?;
@@ -2195,10 +2434,18 @@ async fn take_screenshot(app: AppHandle) -> Result<String, String> {
                 chunk.swap(0, 2); // Swap B and R
             }
 
-            // Save using image crate
+            // Save using image crate - use JPEG for faster encoding
             let img = image::RgbaImage::from_raw(width as u32, height as u32, pixels)
                 .ok_or("Failed to create image from pixels")?;
-            img.save(&filepath)
+
+            // Convert RGBA to RGB for JPEG (no alpha channel)
+            let rgb_img = image::DynamicImage::ImageRgba8(img).to_rgb8();
+
+            // Save as JPEG with quality 85 (good balance of quality vs speed/size)
+            let mut file = std::fs::File::create(&filepath)
+                .map_err(|e| format!("Failed to create screenshot file: {}", e))?;
+            let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 85);
+            rgb_img.write_with_encoder(encoder)
                 .map_err(|e| format!("Failed to save screenshot: {}", e))?;
         }
     }
@@ -2276,6 +2523,184 @@ async fn take_screenshot(app: AppHandle) -> Result<String, String> {
     println!("[screenshot] Saved to: {:?}", filepath);
 
     Ok(filepath.to_string_lossy().to_string())
+}
+
+/// Captures a screenshot and returns it as base64 directly (no disk I/O for speed)
+async fn take_screenshot_base64(app: AppHandle) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: use screencapture to temp file, read and encode
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| format!("Time error: {}", e))?
+            .as_millis();
+        let temp_path = std::env::temp_dir().join(format!("oto_screenshot_{}.jpg", timestamp));
+
+        let display_index = if let Some(window) = app.get_webview_window("overlay") {
+            if let Ok(Some(monitor)) = window.current_monitor() {
+                if let Ok(monitors) = window.available_monitors() {
+                    monitors
+                        .iter()
+                        .position(|m| m.name() == monitor.name())
+                        .map(|i| i + 1)
+                        .unwrap_or(1)
+                } else {
+                    1
+                }
+            } else {
+                1
+            }
+        } else {
+            1
+        };
+
+        let output = std::process::Command::new("screencapture")
+            .arg("-x")
+            .arg("-t")
+            .arg("jpg")
+            .arg("-D")
+            .arg(display_index.to_string())
+            .arg(&temp_path)
+            .output()
+            .map_err(|e| format!("Failed to run screencapture: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("could not create image") {
+                return Err("Screen recording permission required. Go to System Settings > Privacy & Security > Screen Recording and enable Oto Desktop.".to_string());
+            }
+            return Err(format!("screencapture failed: {}", stderr));
+        }
+
+        let bytes = std::fs::read(&temp_path)
+            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
+        let _ = std::fs::remove_file(&temp_path);
+        return Ok(BASE64.encode(&bytes));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Graphics::Gdi::*;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+
+        let (left, top, width, height) = if let Some(window) = app.get_webview_window("overlay") {
+            if let Ok(Some(monitor)) = window.current_monitor() {
+                let pos = monitor.position();
+                let size = monitor.size();
+                (pos.x, pos.y, size.width as i32, size.height as i32)
+            } else {
+                unsafe {
+                    (
+                        0,
+                        0,
+                        GetSystemMetrics(SM_CXSCREEN),
+                        GetSystemMetrics(SM_CYSCREEN),
+                    )
+                }
+            }
+        } else {
+            unsafe {
+                (
+                    0,
+                    0,
+                    GetSystemMetrics(SM_CXSCREEN),
+                    GetSystemMetrics(SM_CYSCREEN),
+                )
+            }
+        };
+
+        unsafe {
+            let screen_dc = GetDC(None);
+            if screen_dc.is_invalid() {
+                return Err("Failed to get screen DC".to_string());
+            }
+
+            let mem_dc = CreateCompatibleDC(screen_dc);
+            if mem_dc.is_invalid() {
+                ReleaseDC(None, screen_dc);
+                return Err("Failed to create compatible DC".to_string());
+            }
+
+            let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
+            if bitmap.is_invalid() {
+                let _ = DeleteDC(mem_dc);
+                ReleaseDC(None, screen_dc);
+                return Err("Failed to create bitmap".to_string());
+            }
+
+            let old_bitmap = SelectObject(mem_dc, bitmap);
+            BitBlt(mem_dc, 0, 0, width, height, screen_dc, left, top, SRCCOPY)
+                .map_err(|e| format!("BitBlt failed: {}", e))?;
+
+            let mut bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width,
+                    biHeight: -height,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    biSizeImage: 0,
+                    biXPelsPerMeter: 0,
+                    biYPelsPerMeter: 0,
+                    biClrUsed: 0,
+                    biClrImportant: 0,
+                },
+                bmiColors: [RGBQUAD::default()],
+            };
+
+            let mut pixels: Vec<u8> = vec![0; (width * height * 4) as usize];
+            GetDIBits(
+                mem_dc,
+                bitmap,
+                0,
+                height as u32,
+                Some(pixels.as_mut_ptr() as *mut _),
+                &mut bmi,
+                DIB_RGB_COLORS,
+            );
+
+            SelectObject(mem_dc, old_bitmap);
+            let _ = DeleteObject(bitmap);
+            let _ = DeleteDC(mem_dc);
+            ReleaseDC(None, screen_dc);
+
+            // Convert BGRA to RGBA
+            for chunk in pixels.chunks_exact_mut(4) {
+                chunk.swap(0, 2);
+            }
+
+            // Create image and encode to JPEG in memory (no disk I/O)
+            let img = image::RgbaImage::from_raw(width as u32, height as u32, pixels)
+                .ok_or("Failed to create image from pixels")?;
+            let rgb_img = image::DynamicImage::ImageRgba8(img).to_rgb8();
+
+            // Encode to JPEG in memory buffer
+            let mut buffer = std::io::Cursor::new(Vec::new());
+            let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, 85);
+            rgb_img.write_with_encoder(encoder)
+                .map_err(|e| format!("Failed to encode screenshot: {}", e))?;
+
+            return Ok(BASE64.encode(buffer.into_inner()));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: fall back to file-based approach
+        let screenshot_path = take_screenshot(app).await?;
+        let bytes = std::fs::read(&screenshot_path)
+            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
+        return Ok(BASE64.encode(&bytes));
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        Err("Screenshot not supported on this platform".to_string())
+    }
 }
 
 #[command]
@@ -2557,6 +2982,7 @@ fn main() {
             save_dialogue_prompt,
             get_dialogue_prompt,
             send_chat_message,
+            send_chat_message_stream,
             get_chat_history,
             clear_chat_history,
             trigger_deep_research,
