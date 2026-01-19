@@ -2135,33 +2135,99 @@
                 userDiv.textContent = message;
                 historyContent.appendChild(userDiv);
 
-                // Add loading indicator
-                const loadingDiv = document.createElement('div');
-                loadingDiv.className = 'history-message assistant';
-                loadingDiv.id = 'history-loading';
-                loadingDiv.textContent = 'Thinking...';
-                historyContent.appendChild(loadingDiv);
+                // Determine the response role class based on context level
+                const contextLevel = AppState.historyFilterLevel;
+                const responseRole = contextLevel === 1 ? 'character' : contextLevel === 2 ? 'deep-thought' : 'assistant';
+
+                // Create streaming message div (replaces "Thinking...")
+                const streamDiv = document.createElement('div');
+                streamDiv.className = `history-message ${responseRole}`;
+                streamDiv.id = 'streaming-message';
+                streamDiv.setAttribute('data-context-level', contextLevel);
+                historyContent.appendChild(streamDiv);
+
+                // Track streaming content
+                let assistantContent = '';
+                let characterContent = '';
+                let characterDiv = null;
 
                 // Scroll to bottom
                 scrollHistoryToBottom();
 
-                try {
-                    const contextLevel = AppState.historyFilterLevel;
-                    const response = await invoke('send_chat_message', { message, includeScreenshot: withScreenshot, contextLevel });
-                    console.log('[Chat] Response:', response);
+                // Set up stream listeners
+                const unlistenChunk = await listen('chat-stream-chunk', (event) => {
+                    const { chunk, role } = event.payload;
 
-                    // Remove loading indicator and reload full history
-                    const loadingEl = document.getElementById('history-loading');
-                    if (loadingEl) loadingEl.remove();
-                    await loadChatHistory();
-                    applyHistoryFilter();
+                    if (role === 'character') {
+                        // Character comments (only for level 0)
+                        if (!characterDiv) {
+                            characterDiv = document.createElement('div');
+                            characterDiv.className = 'history-message character';
+                            characterDiv.id = 'streaming-character';
+                            characterDiv.setAttribute('data-context-level', '0');
+                            historyContent.appendChild(characterDiv);
+                        }
+                        characterContent += chunk;
+                        characterDiv.textContent = characterContent;
+                    } else {
+                        // Main response (assistant, character for level 1, deep-thought for level 2)
+                        assistantContent += chunk;
+                        const el = document.getElementById('streaming-message');
+                        if (el) {
+                            // Use markdown for assistant and deep-thought, plain text for character (level 1)
+                            if (role === 'assistant' || role === 'deep-thought') {
+                                el.innerHTML = parseMarkdown(assistantContent);
+                            } else {
+                                el.textContent = assistantContent;
+                            }
+                        }
+                    }
+                    scrollHistoryToBottom();
+                });
+
+                const unlistenDone = await listen('chat-stream-done', async (event) => {
+                    console.log('[Chat] Stream done:', event.payload);
+                    // If this is the final done event (character for level 0, or main response for other levels)
+                    const { role } = event.payload;
+                    if ((contextLevel === 0 && role === 'character') || (contextLevel !== 0 && role !== 'character')) {
+                        // Clean up IDs
+                        const streamEl = document.getElementById('streaming-message');
+                        if (streamEl) streamEl.removeAttribute('id');
+                        const charEl = document.getElementById('streaming-character');
+                        if (charEl) charEl.removeAttribute('id');
+                    }
+                });
+
+                const unlistenError = await listen('chat-stream-error', (event) => {
+                    console.error('[Chat] Stream error:', event.payload);
+                    const el = document.getElementById('streaming-message');
+                    if (el) {
+                        el.textContent = 'Error: ' + event.payload.error;
+                        el.style.color = '#f87171';
+                    }
+                });
+
+                try {
+                    // Invoke streaming command (returns when streaming completes)
+                    await invoke('send_chat_message_stream', { message, includeScreenshot: withScreenshot, contextLevel });
+                    console.log('[Chat] Streaming complete');
                 } catch (error) {
                     console.error('[Chat] Error:', error);
-                    const loadingEl = document.getElementById('history-loading');
-                    if (loadingEl) {
-                        loadingEl.textContent = 'Error: ' + error;
-                        loadingEl.style.color = '#f87171';
+                    const el = document.getElementById('streaming-message');
+                    if (el) {
+                        el.textContent = 'Error: ' + error;
+                        el.style.color = '#f87171';
                     }
+                } finally {
+                    // Clean up listeners
+                    unlistenChunk();
+                    unlistenDone();
+                    unlistenError();
+                    // Remove streaming IDs
+                    const streamEl = document.getElementById('streaming-message');
+                    if (streamEl) streamEl.removeAttribute('id');
+                    const charEl = document.getElementById('streaming-character');
+                    if (charEl) charEl.removeAttribute('id');
                 }
             }
         });
