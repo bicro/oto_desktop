@@ -98,9 +98,16 @@
 
         .chat-history.visible ~ .chat-input-bar {
             border-radius: 0 0 16px 16px;
+            opacity: 1;
+            transform: translateY(0);
         }
 
         body:hover .chat-input-bar {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .chat-input-bar:focus-within {
             opacity: 1;
             transform: translateY(0);
         }
@@ -1840,7 +1847,6 @@
                 const withScreenshot = AppState.includeScreenshot;
                 console.log('[Chat] Sending message:', message, 'screenshot:', withScreenshot);
                 chatInput.value = '';
-                closeTextbox();
 
                 // Always open history view if not already open
                 if (!isHistoryOpen) {
