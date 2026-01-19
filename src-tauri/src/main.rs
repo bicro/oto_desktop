@@ -909,8 +909,8 @@ async fn send_chat_message(
         }
     };
 
-    // Take screenshot if enabled (only for level 0) - uses fast in-memory encoding
-    let screenshot_base64 = if include_screenshot && context_level == 0 {
+    // Take screenshot if enabled - uses fast in-memory encoding
+    let screenshot_base64 = if include_screenshot {
         Some(take_screenshot_base64(app).await?)
     } else {
         None
@@ -1122,8 +1122,8 @@ async fn send_chat_message_stream(
         _ => get_system_prompt().await?,
     };
 
-    // Take screenshot if enabled (only for level 0) - uses fast in-memory encoding
-    let screenshot_base64 = if include_screenshot && context_level == 0 {
+    // Take screenshot if enabled - uses fast in-memory encoding
+    let screenshot_base64 = if include_screenshot {
         Some(take_screenshot_base64(app.clone()).await?)
     } else {
         None
