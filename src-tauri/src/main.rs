@@ -652,8 +652,63 @@ async fn save_api_key(key: String) -> Result<(), String> {
     Ok(())
 }
 
+// ============ Built-in API Key Support ============
+
+/// XOR key for deobfuscation (must match build.rs)
+const XOR_KEY: [u8; 16] = [
+    0x4f, 0x72, 0x61, 0x6e, 0x67, 0x65, 0x50, 0x69,
+    0x6e, 0x65, 0x61, 0x70, 0x70, 0x6c, 0x65, 0x21,
+];
+
+/// Compile-time embedded obfuscated API key (hex-encoded)
+const OBFUSCATED_API_KEY: &str = env!("OBFUSCATED_API_KEY");
+
+/// Whether a built-in API key was provided at compile time
+const HAS_BUILTIN_KEY: &str = env!("HAS_BUILTIN_KEY");
+
+/// Deobfuscate the hex-encoded XOR-obfuscated API key
+fn deobfuscate_api_key(hex_encoded: &str) -> Option<String> {
+    if hex_encoded.is_empty() {
+        return None;
+    }
+
+    // Decode hex string to bytes
+    let obfuscated: Vec<u8> = (0..hex_encoded.len())
+        .step_by(2)
+        .filter_map(|i| u8::from_str_radix(&hex_encoded[i..i + 2], 16).ok())
+        .collect();
+
+    if obfuscated.is_empty() {
+        return None;
+    }
+
+    // XOR deobfuscate
+    let deobfuscated: Vec<u8> = obfuscated
+        .iter()
+        .enumerate()
+        .map(|(i, b)| b ^ XOR_KEY[i % XOR_KEY.len()])
+        .collect();
+
+    String::from_utf8(deobfuscated).ok()
+}
+
+/// Get the built-in API key if one was embedded at compile time
+fn get_builtin_api_key() -> Option<String> {
+    if HAS_BUILTIN_KEY == "1" {
+        deobfuscate_api_key(OBFUSCATED_API_KEY)
+    } else {
+        None
+    }
+}
+
 #[command]
 async fn get_api_key() -> Result<Option<String>, String> {
+    // First, check for compile-time embedded key
+    if let Some(builtin_key) = get_builtin_api_key() {
+        return Ok(Some(builtin_key));
+    }
+
+    // Fall back to user-configured key
     let key_path = get_api_key_path()?;
 
     if key_path.exists() {
@@ -667,6 +722,12 @@ async fn get_api_key() -> Result<Option<String>, String> {
 
 #[command]
 async fn has_api_key() -> Result<bool, String> {
+    // Check for built-in key first
+    if get_builtin_api_key().is_some() {
+        return Ok(true);
+    }
+
+    // Fall back to checking user-configured key
     let key_path = get_api_key_path()?;
     Ok(key_path.exists())
 }
