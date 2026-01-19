@@ -888,8 +888,6 @@ async fn send_chat_message(
     include_screenshot: bool,
     context_level: u8,
 ) -> Result<ChatResponse, String> {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-
     // Get API key
     let api_key = get_api_key()
         .await?
@@ -911,12 +909,9 @@ async fn send_chat_message(
         }
     };
 
-    // Take screenshot if enabled (only for level 0)
+    // Take screenshot if enabled (only for level 0) - uses fast in-memory encoding
     let screenshot_base64 = if include_screenshot && context_level == 0 {
-        let screenshot_path = take_screenshot(app).await?;
-        let screenshot_bytes = std::fs::read(&screenshot_path)
-            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
-        Some(BASE64.encode(&screenshot_bytes))
+        Some(take_screenshot_base64(app).await?)
     } else {
         None
     };
@@ -992,7 +987,7 @@ async fn send_chat_message(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": format!("data:image/png;base64,{}", base64)
+                        "url": format!("data:image/jpeg;base64,{}", base64)
                     }
                 }
             ]
@@ -1115,8 +1110,6 @@ async fn send_chat_message_stream(
     include_screenshot: bool,
     context_level: u8,
 ) -> Result<(), String> {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-
     // Get API key
     let api_key = get_api_key()
         .await?
@@ -1129,12 +1122,9 @@ async fn send_chat_message_stream(
         _ => get_system_prompt().await?,
     };
 
-    // Take screenshot if enabled (only for level 0)
+    // Take screenshot if enabled (only for level 0) - uses fast in-memory encoding
     let screenshot_base64 = if include_screenshot && context_level == 0 {
-        let screenshot_path = take_screenshot(app.clone()).await?;
-        let screenshot_bytes = std::fs::read(&screenshot_path)
-            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
-        Some(BASE64.encode(&screenshot_bytes))
+        Some(take_screenshot_base64(app.clone()).await?)
     } else {
         None
     };
@@ -1186,7 +1176,7 @@ async fn send_chat_message_stream(
             "role": "user",
             "content": [
                 { "type": "text", "text": message.clone() },
-                { "type": "image_url", "image_url": { "url": format!("data:image/png;base64,{}", base64) } }
+                { "type": "image_url", "image_url": { "url": format!("data:image/jpeg;base64,{}", base64) } }
             ]
         }));
     } else {
@@ -2295,7 +2285,7 @@ async fn take_screenshot(app: AppHandle) -> Result<String, String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("Time error: {}", e))?
         .as_millis();
-    let filename = format!("{:x}.png", timestamp);
+    let filename = format!("{:x}.jpg", timestamp);
 
     // Get screenshots directory and create if needed
     let screenshots_dir = get_screenshots_dir()?;
@@ -2444,10 +2434,18 @@ async fn take_screenshot(app: AppHandle) -> Result<String, String> {
                 chunk.swap(0, 2); // Swap B and R
             }
 
-            // Save using image crate
+            // Save using image crate - use JPEG for faster encoding
             let img = image::RgbaImage::from_raw(width as u32, height as u32, pixels)
                 .ok_or("Failed to create image from pixels")?;
-            img.save(&filepath)
+
+            // Convert RGBA to RGB for JPEG (no alpha channel)
+            let rgb_img = image::DynamicImage::ImageRgba8(img).to_rgb8();
+
+            // Save as JPEG with quality 85 (good balance of quality vs speed/size)
+            let mut file = std::fs::File::create(&filepath)
+                .map_err(|e| format!("Failed to create screenshot file: {}", e))?;
+            let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 85);
+            rgb_img.write_with_encoder(encoder)
                 .map_err(|e| format!("Failed to save screenshot: {}", e))?;
         }
     }
@@ -2525,6 +2523,184 @@ async fn take_screenshot(app: AppHandle) -> Result<String, String> {
     println!("[screenshot] Saved to: {:?}", filepath);
 
     Ok(filepath.to_string_lossy().to_string())
+}
+
+/// Captures a screenshot and returns it as base64 directly (no disk I/O for speed)
+async fn take_screenshot_base64(app: AppHandle) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: use screencapture to temp file, read and encode
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| format!("Time error: {}", e))?
+            .as_millis();
+        let temp_path = std::env::temp_dir().join(format!("oto_screenshot_{}.jpg", timestamp));
+
+        let display_index = if let Some(window) = app.get_webview_window("overlay") {
+            if let Ok(Some(monitor)) = window.current_monitor() {
+                if let Ok(monitors) = window.available_monitors() {
+                    monitors
+                        .iter()
+                        .position(|m| m.name() == monitor.name())
+                        .map(|i| i + 1)
+                        .unwrap_or(1)
+                } else {
+                    1
+                }
+            } else {
+                1
+            }
+        } else {
+            1
+        };
+
+        let output = std::process::Command::new("screencapture")
+            .arg("-x")
+            .arg("-t")
+            .arg("jpg")
+            .arg("-D")
+            .arg(display_index.to_string())
+            .arg(&temp_path)
+            .output()
+            .map_err(|e| format!("Failed to run screencapture: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("could not create image") {
+                return Err("Screen recording permission required. Go to System Settings > Privacy & Security > Screen Recording and enable Oto Desktop.".to_string());
+            }
+            return Err(format!("screencapture failed: {}", stderr));
+        }
+
+        let bytes = std::fs::read(&temp_path)
+            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
+        let _ = std::fs::remove_file(&temp_path);
+        return Ok(BASE64.encode(&bytes));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Graphics::Gdi::*;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+
+        let (left, top, width, height) = if let Some(window) = app.get_webview_window("overlay") {
+            if let Ok(Some(monitor)) = window.current_monitor() {
+                let pos = monitor.position();
+                let size = monitor.size();
+                (pos.x, pos.y, size.width as i32, size.height as i32)
+            } else {
+                unsafe {
+                    (
+                        0,
+                        0,
+                        GetSystemMetrics(SM_CXSCREEN),
+                        GetSystemMetrics(SM_CYSCREEN),
+                    )
+                }
+            }
+        } else {
+            unsafe {
+                (
+                    0,
+                    0,
+                    GetSystemMetrics(SM_CXSCREEN),
+                    GetSystemMetrics(SM_CYSCREEN),
+                )
+            }
+        };
+
+        unsafe {
+            let screen_dc = GetDC(None);
+            if screen_dc.is_invalid() {
+                return Err("Failed to get screen DC".to_string());
+            }
+
+            let mem_dc = CreateCompatibleDC(screen_dc);
+            if mem_dc.is_invalid() {
+                ReleaseDC(None, screen_dc);
+                return Err("Failed to create compatible DC".to_string());
+            }
+
+            let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
+            if bitmap.is_invalid() {
+                let _ = DeleteDC(mem_dc);
+                ReleaseDC(None, screen_dc);
+                return Err("Failed to create bitmap".to_string());
+            }
+
+            let old_bitmap = SelectObject(mem_dc, bitmap);
+            BitBlt(mem_dc, 0, 0, width, height, screen_dc, left, top, SRCCOPY)
+                .map_err(|e| format!("BitBlt failed: {}", e))?;
+
+            let mut bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width,
+                    biHeight: -height,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    biSizeImage: 0,
+                    biXPelsPerMeter: 0,
+                    biYPelsPerMeter: 0,
+                    biClrUsed: 0,
+                    biClrImportant: 0,
+                },
+                bmiColors: [RGBQUAD::default()],
+            };
+
+            let mut pixels: Vec<u8> = vec![0; (width * height * 4) as usize];
+            GetDIBits(
+                mem_dc,
+                bitmap,
+                0,
+                height as u32,
+                Some(pixels.as_mut_ptr() as *mut _),
+                &mut bmi,
+                DIB_RGB_COLORS,
+            );
+
+            SelectObject(mem_dc, old_bitmap);
+            let _ = DeleteObject(bitmap);
+            let _ = DeleteDC(mem_dc);
+            ReleaseDC(None, screen_dc);
+
+            // Convert BGRA to RGBA
+            for chunk in pixels.chunks_exact_mut(4) {
+                chunk.swap(0, 2);
+            }
+
+            // Create image and encode to JPEG in memory (no disk I/O)
+            let img = image::RgbaImage::from_raw(width as u32, height as u32, pixels)
+                .ok_or("Failed to create image from pixels")?;
+            let rgb_img = image::DynamicImage::ImageRgba8(img).to_rgb8();
+
+            // Encode to JPEG in memory buffer
+            let mut buffer = std::io::Cursor::new(Vec::new());
+            let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, 85);
+            rgb_img.write_with_encoder(encoder)
+                .map_err(|e| format!("Failed to encode screenshot: {}", e))?;
+
+            return Ok(BASE64.encode(buffer.into_inner()));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: fall back to file-based approach
+        let screenshot_path = take_screenshot(app).await?;
+        let bytes = std::fs::read(&screenshot_path)
+            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
+        return Ok(BASE64.encode(&bytes));
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        Err("Screenshot not supported on this platform".to_string())
+    }
 }
 
 #[command]
