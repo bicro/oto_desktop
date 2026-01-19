@@ -2461,11 +2461,13 @@ fn main() {
                 })
                 .build(app)?;
 
-            // Register global shortcut (Option+Space on macOS, Super+Space on Linux/WSL, Alt+Space on Windows)
+            // Register global shortcut (Option+Space on macOS, Super+Space on Linux/WSL, Ctrl+Space on Windows)
             #[cfg(target_os = "linux")]
             let shortcut = Shortcut::new(Some(Modifiers::SUPER), Code::Space);
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "macos")]
             let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::Space);
+            #[cfg(target_os = "windows")]
+            let shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
             app.global_shortcut().register(shortcut)?;
 
             Ok(())
@@ -2500,7 +2502,8 @@ fn main() {
                 .with_handler(|app, shortcut, event| {
                     if event.state() == ShortcutState::Pressed
                         && (shortcut.matches(Modifiers::ALT, Code::Space)
-                            || shortcut.matches(Modifiers::SUPER, Code::Space))
+                            || shortcut.matches(Modifiers::SUPER, Code::Space)
+                            || shortcut.matches(Modifiers::CONTROL, Code::Space))
                     {
                         // Show overlay if hidden
                         let is_visible = {
