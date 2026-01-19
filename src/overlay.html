@@ -85,19 +85,20 @@
         }
 
         .chat-input-bar {
+            position: relative;
             display: flex;
             align-items: center;
             gap: 8px;
             padding: 8px 12px;
             background: rgba(0, 0, 0, 0.85);
-            border-radius: 20px;
+            border-radius: 9999px;
             opacity: 0;
             transform: translateY(20px);
             transition: opacity 0.3s ease, transform 0.3s ease, border-radius 0.3s ease;
         }
 
         .chat-history.visible ~ .chat-input-bar {
-            border-radius: 0 0 16px 16px;
+            border-radius: 0 0 24px 24px;
             opacity: 1;
             transform: translateY(0);
         }
@@ -110,6 +111,25 @@
         .chat-input-bar:focus-within {
             opacity: 1;
             transform: translateY(0);
+        }
+
+        .shortcut-tip {
+            position: absolute;
+            top: -24px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.5);
+            background: rgba(0, 0, 0, 0.6);
+            padding: 3px 10px;
+            border-radius: 10px;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+
+        .chat-history.visible ~ .chat-input-bar .shortcut-tip,
+        .chat-input-bar:focus-within .shortcut-tip {
+            opacity: 0;
         }
 
         .chat-input-bar input {
@@ -500,6 +520,7 @@
             <div class="history-content" id="historyContent"></div>
         </div>
         <div class="chat-input-bar">
+            <span class="shortcut-tip">Alt + Space</span>
             <input type="text" id="chatInput" placeholder="Type a message..." autocomplete="off" />
             <button class="control-btn chat-icon" id="historyBtn" title="Chat History">
                 <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
@@ -1980,6 +2001,7 @@
 
         async function showHistoryModal() {
             historyModal.classList.add('visible');
+            document.getElementById('historyBtn').classList.add('active');
             await loadChatHistory();
             showLevelIndicator();
             updateLevelIndicator();
@@ -1990,6 +2012,7 @@
 
         function hideHistoryModal() {
             historyModal.classList.remove('visible');
+            document.getElementById('historyBtn').classList.remove('active');
             AppState.historyFocusIndex = -1;
             AppState.historyFilterLevel = 0;
             historyContent.querySelectorAll('.focused').forEach(el => el.classList.remove('focused'));
