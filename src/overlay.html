@@ -581,7 +581,7 @@
             <div class="history-content" id="historyContent"></div>
         </div>
         <div class="chat-input-bar">
-            <input type="text" id="chatInput" placeholder="[Alt + Space] to type..." autocomplete="off" />
+            <input type="text" id="chatInput" placeholder="⌥ + Space..." autocomplete="off" />
             <button class="control-btn chat-icon" id="historyBtn" title="Chat History">
                 <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
                     <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.2L4 17.2V4h16v12z"/>
@@ -641,6 +641,9 @@
         const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
         const isLinux = navigator.platform.toUpperCase().indexOf('LINUX') >= 0;
         const isWindows = !isMac && !isLinux;
+
+        // Platform-specific placeholder text
+        const defaultPlaceholder = isMac ? '⌥ + Space...' : 'Alt + Space...';
 
         function updateTooltips() {
             // Tooltips updated as needed
@@ -1677,6 +1680,9 @@
         const historyModal = document.getElementById('historyModal');
         const historyContent = document.getElementById('historyContent');
 
+        // Set platform-specific placeholder on init
+        chatInput.placeholder = defaultPlaceholder;
+
         // NOTE: State variables are now in AppState object at top of file
 
         /**
@@ -1820,7 +1826,7 @@
                 checkCooldownStatus();
             } else {
                 chatPanel.classList.remove('level-2');
-                chatInput.placeholder = 'Type a message...';
+                chatInput.placeholder = defaultPlaceholder;
                 chatInput.disabled = false;
             }
         }
@@ -2265,7 +2271,7 @@
             clearCooldownTimer();
             // Reset input styling
             chatPanel.classList.remove('level-2');
-            chatInput.placeholder = 'Type a message...';
+            chatInput.placeholder = defaultPlaceholder;
             chatInput.disabled = false;
         }
 
