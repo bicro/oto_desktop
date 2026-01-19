@@ -89,7 +89,7 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 8px 12px;
+            padding: 8px;
             background: rgba(0, 0, 0, 0.85);
             border-radius: 9999px;
             opacity: 0;
@@ -1872,6 +1872,7 @@
                 // Always open history view if not already open
                 if (!isHistoryOpen) {
                     historyModal.classList.add('visible');
+                    document.getElementById('historyBtn').classList.add('active');
                     showLevelIndicator();
                     updateLevelIndicator();
                 }
