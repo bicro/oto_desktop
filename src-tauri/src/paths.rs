@@ -41,9 +41,14 @@ pub fn get_db_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join("chat_history.db"))
 }
 
-/// Gets the API key file path
+/// Gets the API key file path (legacy - use get_llm_config_path instead)
 pub fn get_api_key_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join(".api_key"))
+}
+
+/// Gets the LLM configuration file path
+pub fn get_llm_config_path() -> Result<PathBuf, String> {
+    get_app_data_dir().map(|p| p.join(".llm_config.json"))
 }
 
 /// Gets the system prompt file path

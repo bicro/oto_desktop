@@ -159,6 +159,47 @@ fn save_model_config(config: &ModelConfig) -> Result<(), String> {
     std::fs::write(&config_path, content).map_err(|e| format!("Failed to save model config: {}", e))
 }
 
+// ============ LLM Configuration ============
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LLMConfig {
+    pub chat_model: String,
+    pub openrouter_api_key: Option<String>,
+    pub openai_api_key: Option<String>,
+}
+
+impl Default for LLMConfig {
+    fn default() -> Self {
+        Self {
+            chat_model: "anthropic/claude-3.5-sonnet".to_string(),
+            openrouter_api_key: None,
+            openai_api_key: None,
+        }
+    }
+}
+
+fn load_llm_config() -> Result<LLMConfig, String> {
+    let config_path = get_llm_config_path()?;
+    if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read LLM config: {}", e))?;
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse LLM config: {}", e))
+    } else {
+        Ok(LLMConfig::default())
+    }
+}
+
+fn save_llm_config(config: &LLMConfig) -> Result<(), String> {
+    let config_path = get_llm_config_path()?;
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+    let content = serde_json::to_string_pretty(config)
+        .map_err(|e| format!("Failed to serialize LLM config: {}", e))?;
+    std::fs::write(&config_path, content).map_err(|e| format!("Failed to save LLM config: {}", e))
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TransformConfig {
     pub scale: f64,
@@ -636,25 +677,11 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 
 #[command]
 async fn save_api_key(key: String) -> Result<(), String> {
-    info!("[save_api_key] Starting to save API key");
-    let key_path = get_api_key_path()?;
-    info!("[save_api_key] Key path: {:?}", key_path);
-
-    // Ensure parent directory exists
-    if let Some(parent) = key_path.parent() {
-        info!("[save_api_key] Creating parent directory: {:?}", parent);
-        std::fs::create_dir_all(parent).map_err(|e| {
-            error!("[save_api_key] Failed to create directory: {}", e);
-            format!("Failed to create directory: {}", e)
-        })?;
-    }
-
-    std::fs::write(&key_path, &key).map_err(|e| {
-        error!("[save_api_key] Failed to save API key: {}", e);
-        format!("Failed to save API key: {}", e)
-    })?;
-
-    info!("[save_api_key] API key saved successfully");
+    info!("[save_api_key] Starting to save OpenRouter API key");
+    let mut config = load_llm_config()?;
+    config.openrouter_api_key = Some(key);
+    save_llm_config(&config)?;
+    info!("[save_api_key] OpenRouter API key saved successfully");
     Ok(())
 }
 
@@ -709,33 +736,87 @@ fn get_builtin_api_key() -> Option<String> {
 
 #[command]
 async fn get_api_key() -> Result<Option<String>, String> {
-    // First, check for compile-time embedded key
-    if let Some(builtin_key) = get_builtin_api_key() {
-        return Ok(Some(builtin_key));
-    }
-
-    // Fall back to user-configured key
-    let key_path = get_api_key_path()?;
-
-    if key_path.exists() {
-        let key = std::fs::read_to_string(&key_path)
-            .map_err(|e| format!("Failed to read API key: {}", e))?;
-        Ok(Some(key.trim().to_string()))
-    } else {
-        Ok(None)
-    }
+    // Return OpenRouter API key from LLM config
+    let config = load_llm_config()?;
+    Ok(config.openrouter_api_key)
 }
 
 #[command]
 async fn has_api_key() -> Result<bool, String> {
+    // Check for OpenRouter API key in LLM config
+    let config = load_llm_config()?;
+    Ok(config.openrouter_api_key.is_some())
+}
+
+// ============ OpenAI Key Commands (for image editing) ============
+
+#[command]
+async fn save_openai_key(key: String) -> Result<(), String> {
+    info!("[save_openai_key] Saving OpenAI API key for image editing");
+    let mut config = load_llm_config()?;
+    config.openai_api_key = Some(key);
+    save_llm_config(&config)?;
+    info!("[save_openai_key] OpenAI API key saved successfully");
+    Ok(())
+}
+
+#[command]
+async fn get_openai_key() -> Result<Option<String>, String> {
+    // First check for built-in key (compile-time embedded)
+    if let Some(builtin_key) = get_builtin_api_key() {
+        return Ok(Some(builtin_key));
+    }
+    // Fall back to user-configured key in LLM config
+    let config = load_llm_config()?;
+    Ok(config.openai_api_key)
+}
+
+#[command]
+async fn has_openai_key() -> Result<bool, String> {
     // Check for built-in key first
     if get_builtin_api_key().is_some() {
         return Ok(true);
     }
+    // Fall back to checking LLM config
+    let config = load_llm_config()?;
+    Ok(config.openai_api_key.is_some())
+}
 
-    // Fall back to checking user-configured key
-    let key_path = get_api_key_path()?;
-    Ok(key_path.exists())
+// ============ LLM Model Selection Commands ============
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ModelOption {
+    pub id: String,
+    pub name: String,
+}
+
+#[command]
+async fn get_llm_config_cmd() -> Result<LLMConfig, String> {
+    load_llm_config()
+}
+
+#[command]
+async fn set_chat_model(model: String) -> Result<(), String> {
+    info!("[set_chat_model] Setting chat model to: {}", model);
+    let mut config = load_llm_config()?;
+    config.chat_model = model;
+    save_llm_config(&config)?;
+    info!("[set_chat_model] Chat model updated successfully");
+    Ok(())
+}
+
+#[command]
+async fn get_available_models() -> Result<Vec<ModelOption>, String> {
+    // Return a curated list of recommended models available on OpenRouter
+    Ok(vec![
+        ModelOption { id: "anthropic/claude-3.5-sonnet".to_string(), name: "Claude 3.5 Sonnet".to_string() },
+        ModelOption { id: "anthropic/claude-3-opus".to_string(), name: "Claude 3 Opus".to_string() },
+        ModelOption { id: "openai/gpt-4-turbo".to_string(), name: "GPT-4 Turbo".to_string() },
+        ModelOption { id: "openai/gpt-4o".to_string(), name: "GPT-4o".to_string() },
+        ModelOption { id: "openai/gpt-4o-mini".to_string(), name: "GPT-4o Mini".to_string() },
+        ModelOption { id: "google/gemini-pro-1.5".to_string(), name: "Gemini Pro 1.5".to_string() },
+        ModelOption { id: "meta-llama/llama-3.1-405b-instruct".to_string(), name: "Llama 3.1 405B".to_string() },
+    ])
 }
 
 // ============ Prompt Commands ============
@@ -914,6 +995,43 @@ async fn clear_hitbox() -> Result<(), String> {
 
 // ============ Chat Commands ============
 
+const OPENROUTER_REFERER: &str = "https://oto.frisson.app";
+const OPENROUTER_TITLE: &str = "Oto Desktop";
+
+async fn call_openrouter_chat(
+    messages: Vec<Value>,
+    max_tokens: u32,
+    stream: bool,
+) -> Result<reqwest::Response, String> {
+    let config = load_llm_config()?;
+    let api_key = config
+        .openrouter_api_key
+        .ok_or_else(|| "OpenRouter API key not configured".to_string())?;
+
+    let client = reqwest::Client::new();
+
+    let mut body = json!({
+        "model": config.chat_model,
+        "messages": messages,
+        "max_tokens": max_tokens
+    });
+
+    if stream {
+        body["stream"] = json!(true);
+    }
+
+    client
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("HTTP-Referer", OPENROUTER_REFERER)
+        .header("X-Title", OPENROUTER_TITLE)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("API request failed: {}", e))
+}
+
 #[command]
 async fn send_chat_message(
     app: AppHandle,
@@ -921,11 +1039,6 @@ async fn send_chat_message(
     include_screenshot: bool,
     context_level: u8,
 ) -> Result<ChatResponse, String> {
-    // Get API key
-    let api_key = get_api_key()
-        .await?
-        .ok_or_else(|| "API key not configured".to_string())?;
-
     // Get system prompt based on level
     let system_prompt = match context_level {
         1 => {
@@ -1009,20 +1122,8 @@ async fn send_chat_message(
         }));
     }
 
-    // Call OpenAI API for main response
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&json!({
-            "model": "gpt-4.1-2025-04-14",
-            "messages": messages,
-            "max_tokens": 1000
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("API request failed: {}", e))?;
+    // Call OpenRouter API for main response
+    let response = call_openrouter_chat(messages, 1000, false).await?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
@@ -1069,11 +1170,6 @@ async fn send_chat_message_stream(
     include_screenshot: bool,
     context_level: u8,
 ) -> Result<(), String> {
-    // Get API key
-    let api_key = get_api_key()
-        .await?
-        .ok_or_else(|| "API key not configured".to_string())?;
-
     // Get system prompt based on level
     let system_prompt = match context_level {
         1 => get_dialogue_prompt().await?,
@@ -1152,21 +1248,8 @@ async fn send_chat_message_stream(
         _ => "assistant",
     };
 
-    // Call OpenAI API with streaming
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&json!({
-            "model": "gpt-4.1-2025-04-14",
-            "messages": messages,
-            "max_tokens": 1000,
-            "stream": true
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("API request failed: {}", e))?;
+    // Call OpenRouter API with streaming
+    let response = call_openrouter_chat(messages, 1000, true).await?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
@@ -1270,10 +1353,10 @@ async fn generate_texture(prompt: String) -> Result<String, String> {
     let texture_dir = get_texture_dir_for_model(&config.folder, &texture_folder)?;
     let originals_dir = get_originals_dir_for_model(&config.folder, &texture_folder)?;
 
-    // Get OpenAI API key
-    let api_key = get_api_key()
+    // Get OpenAI API key for image editing
+    let api_key = get_openai_key()
         .await?
-        .ok_or_else(|| "No API key configured".to_string())?;
+        .ok_or_else(|| "OpenAI API key required for image editing".to_string())?;
 
     // Discover texture files dynamically
     let texture_files: Vec<String> = std::fs::read_dir(&texture_dir)
@@ -2813,6 +2896,12 @@ fn main() {
             save_api_key,
             get_api_key,
             has_api_key,
+            save_openai_key,
+            get_openai_key,
+            has_openai_key,
+            get_llm_config_cmd,
+            set_chat_model,
+            get_available_models,
             save_system_prompt,
             get_system_prompt,
             save_character_prompt,
