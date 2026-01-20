@@ -41,3 +41,7 @@ src-tauri/gen/
 # Debug
 debug/
 *.pdb
+
+# Beta build artifacts
+beta_builds/
+beta_testers.csv
