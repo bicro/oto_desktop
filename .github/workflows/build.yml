@@ -37,13 +37,6 @@ jobs:
           path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
-      - name: Upload macOS App
-        uses: actions/upload-artifact@v4
-        with:
-          name: oto-desktop-macos-app
-          path: src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
-          if-no-files-found: error
-
   build-windows:
     runs-on: windows-latest
 
@@ -70,11 +63,4 @@ jobs:
         with:
           name: oto-desktop-windows-msi
           path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
-          if-no-files-found: warn
-
-      - name: Upload Windows EXE
-        uses: actions/upload-artifact@v4
-        with:
-          name: oto-desktop-windows-exe
-          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
           if-no-files-found: warn
