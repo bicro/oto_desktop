@@ -9,7 +9,7 @@ mod prompts;
 
 // Re-exports for internal use
 use db::{clear_chat_history_internal, get_chat_history_internal, store_chat_message};
-use models::{ChatMessage, ChatResponse, DeepResearchResponse, TextureVersion};
+use models::{ChatMessage, ChatResponse, TextureVersion};
 use paths::*;
 use prompts::*;
 
@@ -740,38 +740,6 @@ async fn get_character_prompt() -> Result<String, String> {
     }
 }
 
-#[command]
-async fn save_deep_research_prompt(prompt: String) -> Result<(), String> {
-    let prompt_path = get_deep_research_prompt_path()?;
-
-    if let Some(parent) = prompt_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
-    }
-
-    std::fs::write(&prompt_path, &prompt)
-        .map_err(|e| format!("Failed to save deep research prompt: {}", e))?;
-
-    Ok(())
-}
-
-#[command]
-async fn get_deep_research_prompt() -> Result<String, String> {
-    let prompt_path = get_deep_research_prompt_path()?;
-
-    if prompt_path.exists() {
-        let prompt = std::fs::read_to_string(&prompt_path)
-            .map_err(|e| format!("Failed to read deep research prompt: {}", e))?;
-        let trimmed = prompt.trim().to_string();
-        if trimmed.is_empty() {
-            Ok(DEFAULT_DEEP_RESEARCH_PROMPT.to_string())
-        } else {
-            Ok(trimmed)
-        }
-    } else {
-        Ok(DEFAULT_DEEP_RESEARCH_PROMPT.to_string())
-    }
-}
 
 #[command]
 async fn save_dialogue_prompt(prompt: String) -> Result<(), String> {
@@ -899,18 +867,14 @@ async fn send_chat_message(
             // Level 1: Use dialogue prompt (respond AS the character in direct conversation)
             get_dialogue_prompt().await?
         }
-        2 => {
-            // Level 2: Use deep research prompt (respond as analyst)
-            get_deep_research_prompt().await?
-        }
         _ => {
             // Level 0: Default system prompt
             get_system_prompt().await?
         }
     };
 
-    // Take screenshot if enabled (only for level 0) - uses fast in-memory encoding
-    let screenshot_base64 = if include_screenshot && context_level == 0 {
+    // Take screenshot if enabled - uses fast in-memory encoding
+    let screenshot_base64 = if include_screenshot {
         Some(take_screenshot_base64(app).await?)
     } else {
         None
@@ -929,16 +893,12 @@ async fn send_chat_message(
     for msg in &history {
         let include_msg = match context_level {
             1 => {
-                // Level 1: User + character + assistant (includes AI responses for context)
-                msg.role == "user" || msg.role == "character" || msg.role == "assistant"
-            }
-            2 => {
-                // Level 2: Only user + deep-thought messages
-                msg.role == "user" || msg.role == "deep-thought"
+                // Level 1: User + character (character's own history)
+                msg.role == "user" || msg.role == "character"
             }
             _ => {
-                // Level 0: All except deep-thought
-                msg.role != "deep-thought"
+                // Level 0: User + assistant only (clean assistant mode)
+                msg.role == "user" || msg.role == "assistant"
             }
         };
 
@@ -947,24 +907,9 @@ async fn send_chat_message(
         }
 
         // Convert custom roles to "assistant" for API compatibility
-        // Add distinct labels for level 1 context so character knows what's what
         let (role, content) = if msg.role == "character" {
-            if context_level == 1 {
-                (
-                    "assistant",
-                    format!("[Character's Inner Thoughts]: {}", msg.content),
-                )
-            } else {
-                ("assistant", format!("[Character]: {}", msg.content))
-            }
-        } else if msg.role == "assistant" && context_level == 1 {
-            // For Level 1, format assistant messages distinctly
-            (
-                "assistant",
-                format!("[AI Assistant Response]: {}", msg.content),
-            )
-        } else if msg.role == "deep-thought" {
-            ("assistant", format!("[Analysis]: {}", msg.content))
+            // Character messages become assistant role for API
+            ("assistant", msg.content.clone())
         } else {
             (msg.role.as_str(), msg.content.clone())
         };
@@ -1033,67 +978,16 @@ async fn send_chat_message(
     let timestamp = chrono::Utc::now().to_rfc3339();
     store_chat_message(&timestamp, "user", &message, context_level)?;
 
-    let character_comments = match context_level {
+    let character_comments: Option<Vec<String>> = match context_level {
         1 => {
-            // Level 1: Save response as "character", no separate character comments
+            // Level 1: Save response as "character"
             store_chat_message(&timestamp, "character", &main_response, 1)?;
             None
         }
-        2 => {
-            // Level 2: Save response as "deep-thought", no character comments
-            store_chat_message(&timestamp, "deep-thought", &main_response, 2)?;
-            None
-        }
         _ => {
-            // Level 0: Save as "assistant", then generate character comment
+            // Level 0: Save as "assistant"
             store_chat_message(&timestamp, "assistant", &main_response, 0)?;
-
-            // Generate character commentary for level 0 only
-            let char_system_prompt = get_character_prompt().await?;
-
-            let char_messages: Vec<Value> = vec![
-                json!({
-                    "role": "system",
-                    "content": char_system_prompt
-                }),
-                json!({
-                    "role": "user",
-                    "content": format!("Here is the AI response to comment on:\n\n{}", main_response)
-                }),
-            ];
-
-            let char_response = client
-                .post("https://api.openai.com/v1/chat/completions")
-                .header("Authorization", format!("Bearer {}", api_key))
-                .header("Content-Type", "application/json")
-                .json(&json!({
-                    "model": "gpt-4.1-2025-04-14",
-                    "messages": char_messages,
-                    "max_tokens": 500
-                }))
-                .send()
-                .await;
-
-            match char_response {
-                Ok(resp) if resp.status().is_success() => {
-                    if let Ok(char_json) = resp.json::<Value>().await {
-                        let char_content = char_json["choices"][0]["message"]["content"]
-                            .as_str()
-                            .unwrap_or("");
-                        if !char_content.is_empty() {
-                            // Store character comment at level 0
-                            store_chat_message(&timestamp, "character", char_content, 0)?;
-                            // Return as single comment at end (not randomly inserted)
-                            Some(vec![char_content.trim().to_string()])
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            }
+            None
         }
     };
 
@@ -1118,12 +1012,11 @@ async fn send_chat_message_stream(
     // Get system prompt based on level
     let system_prompt = match context_level {
         1 => get_dialogue_prompt().await?,
-        2 => get_deep_research_prompt().await?,
         _ => get_system_prompt().await?,
     };
 
-    // Take screenshot if enabled (only for level 0) - uses fast in-memory encoding
-    let screenshot_base64 = if include_screenshot && context_level == 0 {
+    // Take screenshot if enabled - uses fast in-memory encoding
+    let screenshot_base64 = if include_screenshot {
         Some(take_screenshot_base64(app.clone()).await?)
     } else {
         None
@@ -1141,25 +1034,23 @@ async fn send_chat_message_stream(
     // Add past messages for context, filtered by level
     for msg in &history {
         let include_msg = match context_level {
-            1 => msg.role == "user" || msg.role == "character" || msg.role == "assistant",
-            2 => msg.role == "user" || msg.role == "deep-thought",
-            _ => msg.role != "deep-thought",
+            1 => {
+                // Level 1: User + character (character's own history)
+                msg.role == "user" || msg.role == "character"
+            }
+            _ => {
+                // Level 0: User + assistant only (clean assistant mode)
+                msg.role == "user" || msg.role == "assistant"
+            }
         };
 
         if !include_msg {
             continue;
         }
 
+        // Convert custom roles to "assistant" for API compatibility
         let (role, content) = if msg.role == "character" {
-            if context_level == 1 {
-                ("assistant", format!("[Character's Inner Thoughts]: {}", msg.content))
-            } else {
-                ("assistant", format!("[Character]: {}", msg.content))
-            }
-        } else if msg.role == "assistant" && context_level == 1 {
-            ("assistant", format!("[AI Assistant Response]: {}", msg.content))
-        } else if msg.role == "deep-thought" {
-            ("assistant", format!("[Analysis]: {}", msg.content))
+            ("assistant", msg.content.clone())
         } else {
             (msg.role.as_str(), msg.content.clone())
         };
@@ -1193,7 +1084,6 @@ async fn send_chat_message_stream(
     // Determine the role for this context level
     let response_role = match context_level {
         1 => "character",
-        2 => "deep-thought",
         _ => "assistant",
     };
 
@@ -1274,75 +1164,6 @@ async fn send_chat_message_stream(
         "full_content": full_content.clone()
     }));
 
-    // For level 0, also stream character comments
-    if context_level == 0 && !full_content.is_empty() {
-        let char_system_prompt = get_character_prompt().await?;
-
-        let char_messages: Vec<Value> = vec![
-            json!({ "role": "system", "content": char_system_prompt }),
-            json!({ "role": "user", "content": format!("Here is the AI response to comment on:\n\n{}", full_content) }),
-        ];
-
-        let char_response = client
-            .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&json!({
-                "model": "gpt-4.1-2025-04-14",
-                "messages": char_messages,
-                "max_tokens": 500,
-                "stream": true
-            }))
-            .send()
-            .await;
-
-        if let Ok(resp) = char_response {
-            if resp.status().is_success() {
-                let mut char_stream = resp.bytes_stream();
-                let mut char_content = String::new();
-                let mut char_buffer = String::new();
-
-                while let Some(chunk_result) = char_stream.next().await {
-                    if let Ok(chunk) = chunk_result {
-                        let chunk_str = String::from_utf8_lossy(&chunk);
-                        char_buffer.push_str(&chunk_str);
-
-                        while let Some(line_end) = char_buffer.find('\n') {
-                            let line = char_buffer[..line_end].trim().to_string();
-                            char_buffer = char_buffer[line_end + 1..].to_string();
-
-                            if line.is_empty() || line == "data: [DONE]" {
-                                continue;
-                            }
-
-                            if let Some(json_str) = line.strip_prefix("data: ") {
-                                if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
-                                    if let Some(content) = json_value["choices"][0]["delta"]["content"].as_str() {
-                                        char_content.push_str(content);
-                                        let _ = app.emit("chat-stream-chunk", json!({
-                                            "chunk": content,
-                                            "role": "character",
-                                            "context_level": 0
-                                        }));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if !char_content.is_empty() {
-                    store_chat_message(&timestamp, "character", &char_content, 0)?;
-                    let _ = app.emit("chat-stream-done", json!({
-                        "role": "character",
-                        "context_level": 0,
-                        "full_content": char_content
-                    }));
-                }
-            }
-        }
-    }
-
     Ok(())
 }
 
@@ -1356,89 +1177,6 @@ async fn get_chat_history() -> Result<Vec<ChatMessage>, String> {
 #[command]
 async fn clear_chat_history() -> Result<(), String> {
     clear_chat_history_internal()
-}
-
-#[command]
-async fn trigger_deep_research() -> Result<DeepResearchResponse, String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let cooldown_path = get_deep_research_cooldown_path()?;
-    let six_hours: u64 = 6 * 60 * 60;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_secs();
-
-    // Check cooldown
-    if cooldown_path.exists() {
-        let last_time_str = std::fs::read_to_string(&cooldown_path).map_err(|e| e.to_string())?;
-        if let Ok(last_time) = last_time_str.parse::<u64>() {
-            if now - last_time < six_hours {
-                let remaining = six_hours - (now - last_time);
-                // Return cooldown status - frontend will show timer and existing deep thought
-                return Ok(DeepResearchResponse {
-                    on_cooldown: true,
-                    remaining_seconds: remaining,
-                    main_response: String::new(),
-                });
-            }
-        }
-    }
-
-    // Not on cooldown - run deep research
-    let api_key = get_api_key().await?.ok_or("API key not configured")?;
-    let deep_prompt = get_deep_research_prompt().await?;
-    let history = get_chat_history_internal(50)?;
-
-    let context = history
-        .iter()
-        .map(|m| format!("[{}]: {}", m.role, m.content))
-        .collect::<Vec<_>>()
-        .join("\n\n");
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "model": "gpt-4o",
-            "messages": [
-                { "role": "system", "content": deep_prompt },
-                { "role": "user", "content": format!("Analyze this conversation history:\n\n{}", context) }
-            ]
-        }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if !response.status().is_success() {
-        let error_text = response.text().await.unwrap_or_default();
-        error!("[DeepResearch] API error: {}", error_text);
-        return Err(format!("API request failed: {}", error_text));
-    }
-
-    let response_json: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-    let insights = response_json["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("No insights generated")
-        .to_string();
-
-    // Store with deep-thought marker at level 2
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    store_chat_message(&timestamp, "deep-thought", &insights, 2)?;
-
-    // Update cooldown timestamp
-    if let Some(parent) = cooldown_path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    std::fs::write(&cooldown_path, now.to_string()).map_err(|e| e.to_string())?;
-
-    Ok(DeepResearchResponse {
-        on_cooldown: false,
-        remaining_seconds: 0,
-        main_response: insights,
-    })
 }
 
 #[command]
@@ -2977,15 +2715,12 @@ fn main() {
             get_system_prompt,
             save_character_prompt,
             get_character_prompt,
-            save_deep_research_prompt,
-            get_deep_research_prompt,
             save_dialogue_prompt,
             get_dialogue_prompt,
             send_chat_message,
             send_chat_message_stream,
             get_chat_history,
             clear_chat_history,
-            trigger_deep_research,
             clear_all_data,
             generate_texture,
             get_texture_paths,
