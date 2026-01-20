@@ -492,19 +492,6 @@
             color: #39c5bb;
         }
 
-        .chat-tab.tab-deep.active {
-            background: rgba(138, 43, 226, 0.3);
-            color: #dda0dd;
-        }
-
-
-        /* Deep thought messages */
-        .history-message.deep-thought {
-            background: linear-gradient(135deg, rgba(138, 43, 226, 0.2), rgba(75, 0, 130, 0.2));
-            color: #dda0dd;
-            border-left: 3px solid #9370db;
-            margin: 0 10%;
-        }
 
         /* Context menu */
         .context-menu {
@@ -597,8 +584,7 @@
             <div class="history-header">
                 <div class="chat-tabs">
                     <button class="chat-tab tab-assistant active" data-level="0">Assistant</button>
-                    <button class="chat-tab tab-character active" data-level="1">Character</button>
-                    <button class="chat-tab tab-deep" data-level="2">Deep Think</button>
+                    <button class="chat-tab tab-character" data-level="1">Character</button>
                 </div>
                 <button id="closeHistoryBtn">&#x2715;</button>
             </div>
@@ -691,10 +677,9 @@
         }
 
         // ============ Constants ============
-        const DEEP_RESEARCH_COOLDOWN_SECONDS = 6 * 60 * 60; // 6 hours
         const MIN_ASSISTANT_TEXT_LENGTH = 80; // Minimum chars for navigable assistant blocks
         const DOUBLE_TAP_THRESHOLD_MS = 500; // Double-tap detection window
-        const LEVEL_LABELS = ['All', 'Character', 'Deep Think'];
+        const LEVEL_LABELS = ['Assistant', 'Character'];
 
         // ============ Application State ============
         /**
@@ -702,16 +687,12 @@
          * @type {Object}
          */
         const AppState = {
-            /** Active context levels as toggles (0=Assistant, 1=Character, 2=Deep Think) */
-            activeContextLevels: new Set([0, 1]),
+            /** Active context level (0=Assistant, 1=Character) */
+            activeContextLevel: 0,
             /** Current focused element index in history (-1 = none) */
             historyFocusIndex: -1,
             /** Whether to include screenshot with messages */
             includeScreenshot: localStorage.getItem('screenshotEnabled') !== 'false',
-            /** Remaining cooldown seconds for deep research */
-            cooldownRemainingSeconds: 0,
-            /** Cooldown timer interval reference */
-            cooldownTimer: null,
             /** Timestamp of last escape key press */
             lastEscapeTime: 0,
             /** Whether head tracking is enabled */
@@ -1771,42 +1752,49 @@
         }
 
         /**
-         * Changes the history filter level (legacy swipe support - disabled for toggle UI)
+         * Changes the history filter level using arrow keys
          * @param {'left'|'right'} direction - Direction to change level
          */
         function changeHistoryLevel(direction) {
-            // Swipe navigation disabled for toggle-based UI
-            // Use the tab toggles instead
-            return;
+            // Switch between tabs: 0 (Assistant) <-> 1 (Character)
+            if (direction === 'right' && AppState.activeContextLevel === 0) {
+                AppState.activeContextLevel = 1;
+            } else if (direction === 'left' && AppState.activeContextLevel === 1) {
+                AppState.activeContextLevel = 0;
+            } else {
+                return; // Already at the edge
+            }
+
+            AppState.historyFocusIndex = -1;
+            loadChatHistory().then(() => {
+                applyHistoryFilter();
+                chatInput.focus();
+                updateScreenshotVisual();
+            });
         }
 
         /**
-         * Determines if a message should be filtered based on active context levels
-         * @param {string} role - Message role (user/assistant/character/deep-thought)
+         * Determines if a message should be filtered based on active context level
+         * @param {string} role - Message role (user/assistant/character)
          * @param {number} msgContextLevel - Message's context level
          * @returns {boolean} True if message should be hidden
          */
         function shouldFilterMessage(role, msgContextLevel) {
-            const activeLevels = AppState.activeContextLevels;
+            const activeLevel = AppState.activeContextLevel;
 
-            // User messages: show if their context level is active
+            // User messages: show if their context level matches active
             if (role === 'user') {
-                return !activeLevels.has(msgContextLevel);
+                return msgContextLevel !== activeLevel;
             }
 
             // Assistant messages: show if level 0 is active
             if (role === 'assistant') {
-                return !activeLevels.has(0);
+                return activeLevel !== 0;
             }
 
-            // Character messages: only show if Character toggle (level 1) is active
+            // Character messages: only show if Character tab (level 1) is active
             if (role === 'character') {
-                return !activeLevels.has(1);
-            }
-
-            // Deep-thought messages: show if level 2 is active
-            if (role === 'deep-thought') {
-                return !activeLevels.has(2);
+                return activeLevel !== 1;
             }
 
             return false;
@@ -1819,8 +1807,7 @@
             historyContent.querySelectorAll('.history-message').forEach(msg => {
                 const role = msg.classList.contains('user') ? 'user' :
                              msg.classList.contains('assistant') ? 'assistant' :
-                             msg.classList.contains('character') ? 'character' :
-                             msg.classList.contains('deep-thought') ? 'deep-thought' : 'unknown';
+                             msg.classList.contains('character') ? 'character' : 'unknown';
                 const msgContextLevel = parseInt(msg.getAttribute('data-context-level') || '0', 10);
                 msg.classList.toggle('filtered', shouldFilterMessage(role, msgContextLevel));
             });
@@ -1830,22 +1817,8 @@
          * Updates the input field placeholder and state based on active context levels
          */
         function updateInputStateForLevel() {
-            const hasDeepThink = AppState.activeContextLevels.has(2);
-            if (hasDeepThink) {
-                chatPanel.classList.add('level-2');
-                if (AppState.cooldownRemainingSeconds > 0) {
-                    chatInput.placeholder = `Deep insights recharge in ${formatCooldownTime(AppState.cooldownRemainingSeconds)}`;
-                    chatInput.disabled = true;
-                } else {
-                    chatInput.placeholder = defaultPlaceholder;
-                    chatInput.disabled = false;
-                }
-                checkCooldownStatus();
-            } else {
-                chatPanel.classList.remove('level-2');
-                chatInput.placeholder = defaultPlaceholder;
-                chatInput.disabled = false;
-            }
+            chatInput.placeholder = defaultPlaceholder;
+            chatInput.disabled = false;
         }
 
         /**
@@ -1873,115 +1846,13 @@
         }
 
         /**
-         * Checks if deep research is on cooldown and starts timer if needed
-         */
-        async function checkCooldownStatus() {
-            try {
-                const result = await invoke('trigger_deep_research');
-                if (result.on_cooldown && result.remaining_seconds > 0) {
-                    startCooldownTimer(result.remaining_seconds);
-                } else {
-                    // Not on cooldown - update placeholder
-                    if (AppState.activeContextLevels.has(2)) {
-                        chatInput.placeholder = defaultPlaceholder;
-                    }
-                }
-            } catch (e) {
-                console.log('[Cooldown] Check failed:', e);
-            }
-        }
-
-        /**
          * Updates the active state of chat tabs
          */
         function updateLevelIndicator() {
             document.querySelectorAll('.chat-tab').forEach(tab => {
                 const level = parseInt(tab.getAttribute('data-level'), 10);
-                tab.classList.toggle('active', AppState.activeContextLevels.has(level));
+                tab.classList.toggle('active', AppState.activeContextLevel === level);
             });
-        }
-
-        // Cooldown timer functions (state stored in AppState)
-
-        /**
-         * Formats cooldown time in human-readable format
-         * @param {number} seconds - Remaining seconds
-         * @returns {string} Formatted time string
-         */
-        function formatCooldownTime(seconds) {
-            const hours = Math.floor(seconds / 3600);
-            const mins = Math.floor((seconds % 3600) / 60);
-            return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
-        }
-
-        /**
-         * Starts the cooldown timer for deep research
-         * @param {number} seconds - Cooldown duration in seconds
-         */
-        function startCooldownTimer(seconds) {
-            clearCooldownTimer();
-            AppState.cooldownRemainingSeconds = seconds;
-
-            // Update placeholder and disable input if deep think is active
-            if (AppState.activeContextLevels.has(2)) {
-                chatInput.placeholder = `Deep insights recharge in ${formatCooldownTime(seconds)}`;
-                chatInput.disabled = true;
-            }
-
-            AppState.cooldownTimer = setInterval(() => {
-                AppState.cooldownRemainingSeconds--;
-                if (AppState.cooldownRemainingSeconds <= 0) {
-                    clearCooldownTimer();
-                    updateStatus('Deep Thought ready!', 'success');
-                    setTimeout(() => updateStatus('', ''), 2000);
-                } else if (AppState.activeContextLevels.has(2)) {
-                    chatInput.placeholder = `Deep insights recharge in ${formatCooldownTime(AppState.cooldownRemainingSeconds)}`;
-                    chatInput.disabled = true;
-                }
-            }, 1000);
-        }
-
-        /**
-         * Clears the cooldown timer and resets state
-         */
-        function clearCooldownTimer() {
-            if (AppState.cooldownTimer) {
-                clearInterval(AppState.cooldownTimer);
-                AppState.cooldownTimer = null;
-            }
-            AppState.cooldownRemainingSeconds = 0;
-            // Reset placeholder and re-enable input if deep think is active
-            if (AppState.activeContextLevels.has(2)) {
-                chatInput.placeholder = defaultPlaceholder;
-                chatInput.disabled = false;
-            }
-        }
-
-        // Deep research trigger
-        async function triggerDeepResearch() {
-            try {
-                console.log('[DeepResearch] Starting...');
-                updateStatus('Analyzing...', 'listening');
-                const result = await invoke('trigger_deep_research');
-                console.log('[DeepResearch] Result:', result);
-
-                if (result.on_cooldown) {
-                    startCooldownTimer(result.remaining_seconds);
-                    await loadChatHistory();
-                    applyHistoryFilter();
-                } else {
-                    // Research complete - start cooldown timer
-                    startCooldownTimer(6 * 60 * 60); // 6 hours
-                    await loadChatHistory();
-                    applyHistoryFilter();
-                    updateStatus('Deep Thought complete!', 'success');
-                    setTimeout(() => updateStatus('', ''), 2000);
-                }
-            } catch (error) {
-                console.error('[DeepResearch] Error:', error);
-                updateStatus(String(error), 'error');
-                setTimeout(() => updateStatus('', ''), 5000);
-            }
         }
 
         /**
@@ -2122,18 +1993,12 @@
                 const message = chatInput.value.trim();
                 const isHistoryOpen = historyModal.classList.contains('visible');
 
-                // If deep think is active with empty input and not on cooldown, trigger deep research
-                if (isHistoryOpen && AppState.activeContextLevels.has(2) && !message && AppState.cooldownRemainingSeconds <= 0) {
-                    e.preventDefault();
-                    triggerDeepResearch();
-                    return;
-                }
-
                 // Normal message send (only if there's a message)
                 if (!message) return;
 
                 const withScreenshot = AppState.includeScreenshot;
-                console.log('[Chat] Sending message:', message, 'screenshot:', withScreenshot);
+                const contextLevel = AppState.activeContextLevel;
+                console.log('[Chat] Sending message:', message, 'screenshot:', withScreenshot, 'level:', contextLevel);
                 chatInput.value = '';
 
                 // Always open history view if not already open
@@ -2143,116 +2008,89 @@
                     updateLevelIndicator();
                 }
 
-                // Get active levels sorted (process in order: 0, 1, 2)
-                const activeLevels = Array.from(AppState.activeContextLevels).sort();
-
-                // Add user message to history immediately (use lowest active level for context)
+                // Add user message to history immediately
                 const userDiv = document.createElement('div');
                 userDiv.className = 'history-message user';
                 userDiv.textContent = message;
-                userDiv.setAttribute('data-context-level', activeLevels[0]);
+                userDiv.setAttribute('data-context-level', contextLevel);
                 historyContent.appendChild(userDiv);
 
                 // Scroll to bottom
                 scrollHistoryToBottom();
 
-                // Process each active level sequentially
-                for (const contextLevel of activeLevels) {
-                    const responseRole = contextLevel === 1 ? 'character' : contextLevel === 2 ? 'deep-thought' : 'assistant';
+                // Determine response role based on context level
+                const responseRole = contextLevel === 1 ? 'character' : 'assistant';
 
-                    // Create streaming message div with thinking indicator
-                    const streamDiv = document.createElement('div');
-                    streamDiv.className = `history-message ${responseRole}`;
-                    streamDiv.id = 'streaming-message';
-                    streamDiv.setAttribute('data-context-level', contextLevel);
-                    streamDiv.innerHTML = 'Thinking<span class="thinking-indicator"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
-                    historyContent.appendChild(streamDiv);
+                // Create streaming message div with thinking indicator
+                const streamDiv = document.createElement('div');
+                streamDiv.className = `history-message ${responseRole}`;
+                streamDiv.id = 'streaming-message';
+                streamDiv.setAttribute('data-context-level', contextLevel);
+                streamDiv.innerHTML = 'Thinking<span class="thinking-indicator"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
+                historyContent.appendChild(streamDiv);
 
-                    // Track streaming content
-                    let assistantContent = '';
-                    let characterContent = '';
-                    let characterDiv = null;
+                // Track streaming content
+                let assistantContent = '';
 
-                    scrollHistoryToBottom();
+                scrollHistoryToBottom();
 
-                    // Set up stream listeners
-                    const unlistenChunk = await listen('chat-stream-chunk', (event) => {
-                        const { chunk, role } = event.payload;
+                // Set up stream listeners
+                const unlistenChunk = await listen('chat-stream-chunk', (event) => {
+                    const { chunk, role } = event.payload;
 
-                        if (role === 'character' && contextLevel === 0 && AppState.activeContextLevels.has(1)) {
-                            // Character COMMENTARY on assistant response (level 0)
-                            if (!characterDiv) {
-                                characterDiv = document.createElement('div');
-                                characterDiv.className = 'history-message character';
-                                characterDiv.id = 'streaming-character';
-                                characterDiv.setAttribute('data-context-level', '0');
-                                historyContent.appendChild(characterDiv);
-                            }
-                            characterContent += chunk;
-                            characterDiv.textContent = characterContent;
-                        } else if (role === 'character' && contextLevel === 1) {
-                            // Character DIALOGUE (level 1) - this is the MAIN response
-                            assistantContent += chunk;
-                            const el = document.getElementById('streaming-message');
-                            if (el) {
-                                el.textContent = assistantContent;
-                            }
-                        } else if (role !== 'character') {
-                            // Assistant (level 0) or deep-thought (level 2) responses
-                            assistantContent += chunk;
-                            const el = document.getElementById('streaming-message');
-                            if (el) {
-                                el.innerHTML = parseMarkdown(assistantContent);
-                            }
-                        }
-                        scrollHistoryToBottom();
-                    });
-
-                    const unlistenDone = await listen('chat-stream-done', async (event) => {
-                        console.log('[Chat] Stream done:', event.payload);
-                        const { role } = event.payload;
-                        // For level 0: wait for character done if Character toggle is active, else wait for assistant done
-                        const waitForCharacter = contextLevel === 0 && AppState.activeContextLevels.has(1);
-                        if ((waitForCharacter && role === 'character') || (!waitForCharacter && contextLevel === 0 && role === 'assistant') || (contextLevel !== 0 && role !== 'character')) {
-                            // Clean up IDs
-                            const streamEl = document.getElementById('streaming-message');
-                            if (streamEl) streamEl.removeAttribute('id');
-                            const charEl = document.getElementById('streaming-character');
-                            if (charEl) charEl.removeAttribute('id');
-                        }
-                    });
-
-                    const unlistenError = await listen('chat-stream-error', (event) => {
-                        console.error('[Chat] Stream error:', event.payload);
+                    if (role === 'character' && contextLevel === 1) {
+                        // Character DIALOGUE (level 1)
+                        assistantContent += chunk;
                         const el = document.getElementById('streaming-message');
                         if (el) {
-                            el.textContent = 'Error: ' + event.payload.error;
-                            el.style.color = '#f87171';
+                            el.textContent = assistantContent;
                         }
-                    });
-
-                    try {
-                        // Invoke streaming command (returns when streaming completes)
-                        await invoke('send_chat_message_stream', { message, includeScreenshot: withScreenshot, contextLevel });
-                        console.log('[Chat] Streaming complete for level', contextLevel);
-                    } catch (error) {
-                        console.error('[Chat] Error:', error);
+                    } else if (role === 'assistant' && contextLevel === 0) {
+                        // Assistant response (level 0)
+                        assistantContent += chunk;
                         const el = document.getElementById('streaming-message');
                         if (el) {
-                            el.textContent = 'Error: ' + error;
-                            el.style.color = '#f87171';
+                            el.innerHTML = parseMarkdown(assistantContent);
                         }
-                    } finally {
-                        // Clean up listeners for this level
-                        unlistenChunk();
-                        unlistenDone();
-                        unlistenError();
-                        // Clean up streaming IDs
-                        const streamEl = document.getElementById('streaming-message');
-                        if (streamEl) streamEl.removeAttribute('id');
-                        const charEl = document.getElementById('streaming-character');
-                        if (charEl) charEl.removeAttribute('id');
                     }
+                    scrollHistoryToBottom();
+                });
+
+                const unlistenDone = await listen('chat-stream-done', async (event) => {
+                    console.log('[Chat] Stream done:', event.payload);
+                    // Clean up IDs
+                    const streamEl = document.getElementById('streaming-message');
+                    if (streamEl) streamEl.removeAttribute('id');
+                });
+
+                const unlistenError = await listen('chat-stream-error', (event) => {
+                    console.error('[Chat] Stream error:', event.payload);
+                    const el = document.getElementById('streaming-message');
+                    if (el) {
+                        el.textContent = 'Error: ' + event.payload.error;
+                        el.style.color = '#f87171';
+                    }
+                });
+
+                try {
+                    // Invoke streaming command (returns when streaming completes)
+                    await invoke('send_chat_message_stream', { message, includeScreenshot: withScreenshot, contextLevel });
+                    console.log('[Chat] Streaming complete for level', contextLevel);
+                } catch (error) {
+                    console.error('[Chat] Error:', error);
+                    const el = document.getElementById('streaming-message');
+                    if (el) {
+                        el.textContent = 'Error: ' + error;
+                        el.style.color = '#f87171';
+                    }
+                } finally {
+                    // Clean up listeners
+                    unlistenChunk();
+                    unlistenDone();
+                    unlistenError();
+                    // Clean up streaming IDs
+                    const streamEl = document.getElementById('streaming-message');
+                    if (streamEl) streamEl.removeAttribute('id');
                 }
             }
         });
@@ -2320,13 +2158,8 @@
                     // Store context level for filtering
                     div.setAttribute('data-context-level', msg.context_level || 0);
 
-                    // Mark deep-thought messages with data attribute
-                    if (msg.role === 'deep-thought') {
-                        div.setAttribute('data-deep-thought', 'true');
-                    }
-
-                    // Use markdown parsing for assistant and deep-thought messages, plain text for user/character
-                    if (msg.role === 'assistant' || msg.role === 'deep-thought') {
+                    // Use markdown parsing for assistant messages, plain text for user/character
+                    if (msg.role === 'assistant') {
                         div.innerHTML = parseMarkdown(msg.content);
                     } else {
                         div.textContent = msg.content;
@@ -2357,15 +2190,10 @@
             historyModal.classList.remove('visible');
             document.getElementById('historyBtn').classList.remove('active');
             AppState.historyFocusIndex = -1;
-            // Reset to default active levels (Assistant + Character)
-            AppState.activeContextLevels = new Set([0, 1]);
             historyContent.querySelectorAll('.focused').forEach(el => el.classList.remove('focused'));
             // Reset filter state of all messages
             historyContent.querySelectorAll('.history-message').forEach(msg => msg.classList.remove('filtered'));
-            updateLevelIndicator(); // Reset tabs to show default as active
-            clearCooldownTimer();
-            // Reset input styling
-            chatPanel.classList.remove('level-2');
+            updateLevelIndicator();
             chatInput.placeholder = defaultPlaceholder;
             chatInput.disabled = false;
         }
@@ -2374,24 +2202,13 @@
             hideHistoryModal();
         };
 
-        // Tab click handlers - toggle behavior
+        // Tab click handlers - exclusive selection (not toggles)
         document.querySelectorAll('.chat-tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 const level = parseInt(tab.getAttribute('data-level'), 10);
 
-                // Toggle the level
-                if (AppState.activeContextLevels.has(level)) {
-                    // Don't allow deselecting all - must have at least one active
-                    if (AppState.activeContextLevels.size > 1) {
-                        AppState.activeContextLevels.delete(level);
-                        // Clear cooldown if toggling off level 2
-                        if (level === 2) {
-                            clearCooldownTimer();
-                        }
-                    }
-                } else {
-                    AppState.activeContextLevels.add(level);
-                }
+                // Set active level (exclusive, not toggle)
+                AppState.activeContextLevel = level;
 
                 AppState.historyFocusIndex = -1;
                 loadChatHistory().then(() => {
