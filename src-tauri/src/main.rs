@@ -9,7 +9,7 @@ mod prompts;
 
 // Re-exports for internal use
 use db::{clear_chat_history_internal, get_chat_history_internal, store_chat_message};
-use models::{ChatMessage, ChatResponse, DeepResearchResponse, TextureVersion};
+use models::{ChatMessage, ChatResponse, TextureVersion};
 use paths::*;
 use prompts::*;
 
@@ -20,13 +20,14 @@ use std::io::{Read, Write as IoWrite};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+#[cfg(target_os = "windows")]
+use tauri::http::Response;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder};
 use tauri::{command, AppHandle, Emitter, Manager};
-#[cfg(target_os = "windows")]
-use tauri::http::Response;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 // rusqlite is now used in db.rs module
+use futures_util::StreamExt;
 use log::{error, info, warn};
 use serde::Deserialize;
 
@@ -204,6 +205,11 @@ fn load_transform_config() -> Result<TransformConfig, String> {
     } else {
         Ok(TransformConfig::default())
     }
+}
+
+#[tauri::command]
+fn quit_app() {
+    std::process::exit(0);
 }
 
 /// Maximum depth to search for model files in nested directories
@@ -801,39 +807,6 @@ async fn get_character_prompt() -> Result<String, String> {
 }
 
 #[command]
-async fn save_deep_research_prompt(prompt: String) -> Result<(), String> {
-    let prompt_path = get_deep_research_prompt_path()?;
-
-    if let Some(parent) = prompt_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
-    }
-
-    std::fs::write(&prompt_path, &prompt)
-        .map_err(|e| format!("Failed to save deep research prompt: {}", e))?;
-
-    Ok(())
-}
-
-#[command]
-async fn get_deep_research_prompt() -> Result<String, String> {
-    let prompt_path = get_deep_research_prompt_path()?;
-
-    if prompt_path.exists() {
-        let prompt = std::fs::read_to_string(&prompt_path)
-            .map_err(|e| format!("Failed to read deep research prompt: {}", e))?;
-        let trimmed = prompt.trim().to_string();
-        if trimmed.is_empty() {
-            Ok(DEFAULT_DEEP_RESEARCH_PROMPT.to_string())
-        } else {
-            Ok(trimmed)
-        }
-    } else {
-        Ok(DEFAULT_DEEP_RESEARCH_PROMPT.to_string())
-    }
-}
-
-#[command]
 async fn save_dialogue_prompt(prompt: String) -> Result<(), String> {
     let prompt_path = get_dialogue_prompt_path()?;
 
@@ -948,8 +921,6 @@ async fn send_chat_message(
     include_screenshot: bool,
     context_level: u8,
 ) -> Result<ChatResponse, String> {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-
     // Get API key
     let api_key = get_api_key()
         .await?
@@ -961,22 +932,15 @@ async fn send_chat_message(
             // Level 1: Use dialogue prompt (respond AS the character in direct conversation)
             get_dialogue_prompt().await?
         }
-        2 => {
-            // Level 2: Use deep research prompt (respond as analyst)
-            get_deep_research_prompt().await?
-        }
         _ => {
             // Level 0: Default system prompt
             get_system_prompt().await?
         }
     };
 
-    // Take screenshot if enabled (only for level 0)
-    let screenshot_base64 = if include_screenshot && context_level == 0 {
-        let screenshot_path = take_screenshot(app).await?;
-        let screenshot_bytes = std::fs::read(&screenshot_path)
-            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
-        Some(BASE64.encode(&screenshot_bytes))
+    // Take screenshot if enabled - uses fast in-memory encoding
+    let screenshot_base64 = if include_screenshot {
+        Some(take_screenshot_base64(app).await?)
     } else {
         None
     };
@@ -994,16 +958,12 @@ async fn send_chat_message(
     for msg in &history {
         let include_msg = match context_level {
             1 => {
-                // Level 1: User + character + assistant (includes AI responses for context)
-                msg.role == "user" || msg.role == "character" || msg.role == "assistant"
-            }
-            2 => {
-                // Level 2: Only user + deep-thought messages
-                msg.role == "user" || msg.role == "deep-thought"
+                // Level 1: User + character (character's own history)
+                msg.role == "user" || msg.role == "character"
             }
             _ => {
-                // Level 0: All except deep-thought
-                msg.role != "deep-thought"
+                // Level 0: User + assistant only (clean assistant mode)
+                msg.role == "user" || msg.role == "assistant"
             }
         };
 
@@ -1012,24 +972,9 @@ async fn send_chat_message(
         }
 
         // Convert custom roles to "assistant" for API compatibility
-        // Add distinct labels for level 1 context so character knows what's what
         let (role, content) = if msg.role == "character" {
-            if context_level == 1 {
-                (
-                    "assistant",
-                    format!("[Character's Inner Thoughts]: {}", msg.content),
-                )
-            } else {
-                ("assistant", format!("[Character]: {}", msg.content))
-            }
-        } else if msg.role == "assistant" && context_level == 1 {
-            // For Level 1, format assistant messages distinctly
-            (
-                "assistant",
-                format!("[AI Assistant Response]: {}", msg.content),
-            )
-        } else if msg.role == "deep-thought" {
-            ("assistant", format!("[Analysis]: {}", msg.content))
+            // Character messages become assistant role for API
+            ("assistant", msg.content.clone())
         } else {
             (msg.role.as_str(), msg.content.clone())
         };
@@ -1052,7 +997,7 @@ async fn send_chat_message(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": format!("data:image/png;base64,{}", base64)
+                        "url": format!("data:image/jpeg;base64,{}", base64)
                     }
                 }
             ]
@@ -1098,67 +1043,16 @@ async fn send_chat_message(
     let timestamp = chrono::Utc::now().to_rfc3339();
     store_chat_message(&timestamp, "user", &message, context_level)?;
 
-    let character_comments = match context_level {
+    let character_comments: Option<Vec<String>> = match context_level {
         1 => {
-            // Level 1: Save response as "character", no separate character comments
+            // Level 1: Save response as "character"
             store_chat_message(&timestamp, "character", &main_response, 1)?;
             None
         }
-        2 => {
-            // Level 2: Save response as "deep-thought", no character comments
-            store_chat_message(&timestamp, "deep-thought", &main_response, 2)?;
-            None
-        }
         _ => {
-            // Level 0: Save as "assistant", then generate character comment
+            // Level 0: Save as "assistant"
             store_chat_message(&timestamp, "assistant", &main_response, 0)?;
-
-            // Generate character commentary for level 0 only
-            let char_system_prompt = get_character_prompt().await?;
-
-            let char_messages: Vec<Value> = vec![
-                json!({
-                    "role": "system",
-                    "content": char_system_prompt
-                }),
-                json!({
-                    "role": "user",
-                    "content": format!("Here is the AI response to comment on:\n\n{}", main_response)
-                }),
-            ];
-
-            let char_response = client
-                .post("https://api.openai.com/v1/chat/completions")
-                .header("Authorization", format!("Bearer {}", api_key))
-                .header("Content-Type", "application/json")
-                .json(&json!({
-                    "model": "gpt-4.1-2025-04-14",
-                    "messages": char_messages,
-                    "max_tokens": 500
-                }))
-                .send()
-                .await;
-
-            match char_response {
-                Ok(resp) if resp.status().is_success() => {
-                    if let Ok(char_json) = resp.json::<Value>().await {
-                        let char_content = char_json["choices"][0]["message"]["content"]
-                            .as_str()
-                            .unwrap_or("");
-                        if !char_content.is_empty() {
-                            // Store character comment at level 0
-                            store_chat_message(&timestamp, "character", char_content, 0)?;
-                            // Return as single comment at end (not randomly inserted)
-                            Some(vec![char_content.trim().to_string()])
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            }
+            None
         }
     };
 
@@ -1166,6 +1060,184 @@ async fn send_chat_message(
         main_response,
         character_comments,
     })
+}
+
+#[command]
+async fn send_chat_message_stream(
+    app: AppHandle,
+    message: String,
+    include_screenshot: bool,
+    context_level: u8,
+) -> Result<(), String> {
+    // Get API key
+    let api_key = get_api_key()
+        .await?
+        .ok_or_else(|| "API key not configured".to_string())?;
+
+    // Get system prompt based on level
+    let system_prompt = match context_level {
+        1 => get_dialogue_prompt().await?,
+        _ => get_system_prompt().await?,
+    };
+
+    // Take screenshot if enabled - uses fast in-memory encoding
+    let screenshot_base64 = if include_screenshot {
+        Some(take_screenshot_base64(app.clone()).await?)
+    } else {
+        None
+    };
+
+    // Get recent chat history for context
+    let history = get_chat_history_internal(10)?;
+
+    // Build messages array with system prompt
+    let mut messages: Vec<Value> = vec![json!({
+        "role": "system",
+        "content": system_prompt
+    })];
+
+    // Add past messages for context, filtered by level
+    for msg in &history {
+        let include_msg = match context_level {
+            1 => {
+                // Level 1: User + character (character's own history)
+                msg.role == "user" || msg.role == "character"
+            }
+            _ => {
+                // Level 0: User + assistant only (clean assistant mode)
+                msg.role == "user" || msg.role == "assistant"
+            }
+        };
+
+        if !include_msg {
+            continue;
+        }
+
+        // Convert custom roles to "assistant" for API compatibility
+        let (role, content) = if msg.role == "character" {
+            ("assistant", msg.content.clone())
+        } else {
+            (msg.role.as_str(), msg.content.clone())
+        };
+
+        messages.push(json!({
+            "role": role,
+            "content": content
+        }));
+    }
+
+    // Add current message (with or without screenshot)
+    if let Some(ref base64) = screenshot_base64 {
+        messages.push(json!({
+            "role": "user",
+            "content": [
+                { "type": "text", "text": message.clone() },
+                { "type": "image_url", "image_url": { "url": format!("data:image/jpeg;base64,{}", base64) } }
+            ]
+        }));
+    } else {
+        messages.push(json!({
+            "role": "user",
+            "content": message.clone()
+        }));
+    }
+
+    // Store user message
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    store_chat_message(&timestamp, "user", &message, context_level)?;
+
+    // Determine the role for this context level
+    let response_role = match context_level {
+        1 => "character",
+        _ => "assistant",
+    };
+
+    // Call OpenAI API with streaming
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&json!({
+            "model": "gpt-4.1-2025-04-14",
+            "messages": messages,
+            "max_tokens": 1000,
+            "stream": true
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("API request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.unwrap_or_default();
+        let _ = app.emit("chat-stream-error", json!({ "error": error_text }));
+        return Err(format!("API error: {}", error_text));
+    }
+
+    // Stream the response
+    let mut stream = response.bytes_stream();
+    let mut full_content = String::new();
+    let mut buffer = String::new();
+
+    while let Some(chunk_result) = stream.next().await {
+        match chunk_result {
+            Ok(chunk) => {
+                let chunk_str = String::from_utf8_lossy(&chunk);
+                buffer.push_str(&chunk_str);
+
+                // Process complete SSE lines from buffer
+                while let Some(line_end) = buffer.find('\n') {
+                    let line = buffer[..line_end].trim().to_string();
+                    buffer = buffer[line_end + 1..].to_string();
+
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    if line == "data: [DONE]" {
+                        break;
+                    }
+
+                    if let Some(json_str) = line.strip_prefix("data: ") {
+                        if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
+                            if let Some(content) =
+                                json_value["choices"][0]["delta"]["content"].as_str()
+                            {
+                                full_content.push_str(content);
+                                let _ = app.emit(
+                                    "chat-stream-chunk",
+                                    json!({
+                                        "chunk": content,
+                                        "role": response_role,
+                                        "context_level": context_level
+                                    }),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = app.emit("chat-stream-error", json!({ "error": e.to_string() }));
+                return Err(format!("Stream error: {}", e));
+            }
+        }
+    }
+
+    // Store the complete response
+    store_chat_message(&timestamp, response_role, &full_content, context_level)?;
+
+    // Emit completion event
+    let _ = app.emit(
+        "chat-stream-done",
+        json!({
+            "role": response_role,
+            "context_level": context_level,
+            "full_content": full_content.clone()
+        }),
+    );
+
+    Ok(())
 }
 
 // Database helper functions (store_chat_message, get_chat_history_internal) are in db.rs
@@ -1178,89 +1250,6 @@ async fn get_chat_history() -> Result<Vec<ChatMessage>, String> {
 #[command]
 async fn clear_chat_history() -> Result<(), String> {
     clear_chat_history_internal()
-}
-
-#[command]
-async fn trigger_deep_research() -> Result<DeepResearchResponse, String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let cooldown_path = get_deep_research_cooldown_path()?;
-    let six_hours: u64 = 6 * 60 * 60;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_secs();
-
-    // Check cooldown
-    if cooldown_path.exists() {
-        let last_time_str = std::fs::read_to_string(&cooldown_path).map_err(|e| e.to_string())?;
-        if let Ok(last_time) = last_time_str.parse::<u64>() {
-            if now - last_time < six_hours {
-                let remaining = six_hours - (now - last_time);
-                // Return cooldown status - frontend will show timer and existing deep thought
-                return Ok(DeepResearchResponse {
-                    on_cooldown: true,
-                    remaining_seconds: remaining,
-                    main_response: String::new(),
-                });
-            }
-        }
-    }
-
-    // Not on cooldown - run deep research
-    let api_key = get_api_key().await?.ok_or("API key not configured")?;
-    let deep_prompt = get_deep_research_prompt().await?;
-    let history = get_chat_history_internal(50)?;
-
-    let context = history
-        .iter()
-        .map(|m| format!("[{}]: {}", m.role, m.content))
-        .collect::<Vec<_>>()
-        .join("\n\n");
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "model": "gpt-4o",
-            "messages": [
-                { "role": "system", "content": deep_prompt },
-                { "role": "user", "content": format!("Analyze this conversation history:\n\n{}", context) }
-            ]
-        }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if !response.status().is_success() {
-        let error_text = response.text().await.unwrap_or_default();
-        error!("[DeepResearch] API error: {}", error_text);
-        return Err(format!("API request failed: {}", error_text));
-    }
-
-    let response_json: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-    let insights = response_json["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("No insights generated")
-        .to_string();
-
-    // Store with deep-thought marker at level 2
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    store_chat_message(&timestamp, "deep-thought", &insights, 2)?;
-
-    // Update cooldown timestamp
-    if let Some(parent) = cooldown_path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    std::fs::write(&cooldown_path, now.to_string()).map_err(|e| e.to_string())?;
-
-    Ok(DeepResearchResponse {
-        on_cooldown: false,
-        remaining_seconds: 0,
-        main_response: insights,
-    })
 }
 
 #[command]
@@ -1579,17 +1568,7 @@ async fn reload_character(
     // Update state
     *state.overlay_visible.lock().unwrap() = true;
 
-    // Wait for page to fully load before emitting init-complete
-    println!("[Rust] Waiting for overlay page to load...");
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-    // Emit init-complete to trigger model loading
-    println!("[Rust] Emitting init-complete to load model");
-    overlay
-        .emit("init-complete", json!({}))
-        .map_err(|e| format!("Failed to emit init-complete: {}", e))?;
-
-    println!("[Rust] Overlay recreated successfully");
+    println!("[Rust] Overlay recreated successfully - DOMContentLoaded will trigger model load");
     Ok("Character reloaded!".to_string())
 }
 
@@ -2107,7 +2086,7 @@ async fn take_screenshot(app: AppHandle) -> Result<String, String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("Time error: {}", e))?
         .as_millis();
-    let filename = format!("{:x}.png", timestamp);
+    let filename = format!("{:x}.jpg", timestamp);
 
     // Get screenshots directory and create if needed
     let screenshots_dir = get_screenshots_dir()?;
@@ -2256,10 +2235,19 @@ async fn take_screenshot(app: AppHandle) -> Result<String, String> {
                 chunk.swap(0, 2); // Swap B and R
             }
 
-            // Save using image crate
+            // Save using image crate - use JPEG for faster encoding
             let img = image::RgbaImage::from_raw(width as u32, height as u32, pixels)
                 .ok_or("Failed to create image from pixels")?;
-            img.save(&filepath)
+
+            // Convert RGBA to RGB for JPEG (no alpha channel)
+            let rgb_img = image::DynamicImage::ImageRgba8(img).to_rgb8();
+
+            // Save as JPEG with quality 85 (good balance of quality vs speed/size)
+            let mut file = std::fs::File::create(&filepath)
+                .map_err(|e| format!("Failed to create screenshot file: {}", e))?;
+            let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 85);
+            rgb_img
+                .write_with_encoder(encoder)
                 .map_err(|e| format!("Failed to save screenshot: {}", e))?;
         }
     }
@@ -2339,6 +2327,185 @@ async fn take_screenshot(app: AppHandle) -> Result<String, String> {
     Ok(filepath.to_string_lossy().to_string())
 }
 
+/// Captures a screenshot and returns it as base64 directly (no disk I/O for speed)
+async fn take_screenshot_base64(app: AppHandle) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: use screencapture to temp file, read and encode
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| format!("Time error: {}", e))?
+            .as_millis();
+        let temp_path = std::env::temp_dir().join(format!("oto_screenshot_{}.jpg", timestamp));
+
+        let display_index = if let Some(window) = app.get_webview_window("overlay") {
+            if let Ok(Some(monitor)) = window.current_monitor() {
+                if let Ok(monitors) = window.available_monitors() {
+                    monitors
+                        .iter()
+                        .position(|m| m.name() == monitor.name())
+                        .map(|i| i + 1)
+                        .unwrap_or(1)
+                } else {
+                    1
+                }
+            } else {
+                1
+            }
+        } else {
+            1
+        };
+
+        let output = std::process::Command::new("screencapture")
+            .arg("-x")
+            .arg("-t")
+            .arg("jpg")
+            .arg("-D")
+            .arg(display_index.to_string())
+            .arg(&temp_path)
+            .output()
+            .map_err(|e| format!("Failed to run screencapture: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("could not create image") {
+                return Err("Screen recording permission required. Go to System Settings > Privacy & Security > Screen Recording and enable Oto Desktop.".to_string());
+            }
+            return Err(format!("screencapture failed: {}", stderr));
+        }
+
+        let bytes =
+            std::fs::read(&temp_path).map_err(|e| format!("Failed to read screenshot: {}", e))?;
+        let _ = std::fs::remove_file(&temp_path);
+        Ok(BASE64.encode(&bytes))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Graphics::Gdi::*;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+
+        let (left, top, width, height) = if let Some(window) = app.get_webview_window("overlay") {
+            if let Ok(Some(monitor)) = window.current_monitor() {
+                let pos = monitor.position();
+                let size = monitor.size();
+                (pos.x, pos.y, size.width as i32, size.height as i32)
+            } else {
+                unsafe {
+                    (
+                        0,
+                        0,
+                        GetSystemMetrics(SM_CXSCREEN),
+                        GetSystemMetrics(SM_CYSCREEN),
+                    )
+                }
+            }
+        } else {
+            unsafe {
+                (
+                    0,
+                    0,
+                    GetSystemMetrics(SM_CXSCREEN),
+                    GetSystemMetrics(SM_CYSCREEN),
+                )
+            }
+        };
+
+        unsafe {
+            let screen_dc = GetDC(None);
+            if screen_dc.is_invalid() {
+                return Err("Failed to get screen DC".to_string());
+            }
+
+            let mem_dc = CreateCompatibleDC(screen_dc);
+            if mem_dc.is_invalid() {
+                ReleaseDC(None, screen_dc);
+                return Err("Failed to create compatible DC".to_string());
+            }
+
+            let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
+            if bitmap.is_invalid() {
+                let _ = DeleteDC(mem_dc);
+                ReleaseDC(None, screen_dc);
+                return Err("Failed to create bitmap".to_string());
+            }
+
+            let old_bitmap = SelectObject(mem_dc, bitmap);
+            BitBlt(mem_dc, 0, 0, width, height, screen_dc, left, top, SRCCOPY)
+                .map_err(|e| format!("BitBlt failed: {}", e))?;
+
+            let mut bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width,
+                    biHeight: -height,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    biSizeImage: 0,
+                    biXPelsPerMeter: 0,
+                    biYPelsPerMeter: 0,
+                    biClrUsed: 0,
+                    biClrImportant: 0,
+                },
+                bmiColors: [RGBQUAD::default()],
+            };
+
+            let mut pixels: Vec<u8> = vec![0; (width * height * 4) as usize];
+            GetDIBits(
+                mem_dc,
+                bitmap,
+                0,
+                height as u32,
+                Some(pixels.as_mut_ptr() as *mut _),
+                &mut bmi,
+                DIB_RGB_COLORS,
+            );
+
+            SelectObject(mem_dc, old_bitmap);
+            let _ = DeleteObject(bitmap);
+            let _ = DeleteDC(mem_dc);
+            ReleaseDC(None, screen_dc);
+
+            // Convert BGRA to RGBA
+            for chunk in pixels.chunks_exact_mut(4) {
+                chunk.swap(0, 2);
+            }
+
+            // Create image and encode to JPEG in memory (no disk I/O)
+            let img = image::RgbaImage::from_raw(width as u32, height as u32, pixels)
+                .ok_or("Failed to create image from pixels")?;
+            let rgb_img = image::DynamicImage::ImageRgba8(img).to_rgb8();
+
+            // Encode to JPEG in memory buffer
+            let mut buffer = std::io::Cursor::new(Vec::new());
+            let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, 85);
+            rgb_img
+                .write_with_encoder(encoder)
+                .map_err(|e| format!("Failed to encode screenshot: {}", e))?;
+
+            return Ok(BASE64.encode(buffer.into_inner()));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: fall back to file-based approach
+        let screenshot_path = take_screenshot(app).await?;
+        let bytes = std::fs::read(&screenshot_path)
+            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
+        return Ok(BASE64.encode(&bytes));
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        Err("Screenshot not supported on this platform".to_string())
+    }
+}
+
 #[command]
 async fn open_screenshots_folder() -> Result<(), String> {
     let screenshots_dir = get_screenshots_dir()?;
@@ -2375,6 +2542,43 @@ async fn open_screenshots_folder() -> Result<(), String> {
     Ok(())
 }
 
+#[command]
+async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
+    let log_dir = app.path().app_log_dir()
+        .map_err(|e| format!("Failed to get log directory: {}", e))?;
+
+    // Create directory if it doesn't exist
+    std::fs::create_dir_all(&log_dir)
+        .map_err(|e| format!("Failed to create log directory: {}", e))?;
+
+    // Open in file manager
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&log_dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&log_dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&log_dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    Ok(())
+}
+
 // ============ Main ============
 
 fn main() {
@@ -2392,8 +2596,7 @@ fn main() {
                     let path_str = uri.path();
 
                     // URL decode the path
-                    let decoded =
-                        urlencoding::decode(path_str).unwrap_or_else(|_| path_str.into());
+                    let decoded = urlencoding::decode(path_str).unwrap_or_else(|_| path_str.into());
 
                     // Strip query string if present (e.g., ?t=123456 cache buster)
                     let path_without_query = decoded.split('?').next().unwrap_or(&decoded);
@@ -2606,6 +2809,7 @@ fn main() {
             open_screen_recording_settings,
             take_screenshot,
             open_screenshots_folder,
+            open_logs_folder,
             save_api_key,
             get_api_key,
             has_api_key,
@@ -2613,14 +2817,12 @@ fn main() {
             get_system_prompt,
             save_character_prompt,
             get_character_prompt,
-            save_deep_research_prompt,
-            get_deep_research_prompt,
             save_dialogue_prompt,
             get_dialogue_prompt,
             send_chat_message,
+            send_chat_message_stream,
             get_chat_history,
             clear_chat_history,
-            trigger_deep_research,
             clear_all_data,
             generate_texture,
             get_texture_paths,
@@ -2634,6 +2836,7 @@ fn main() {
             save_transform_config,
             load_transform_config,
             log_from_frontend,
+            quit_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

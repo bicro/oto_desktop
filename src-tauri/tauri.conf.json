@@ -62,7 +62,7 @@
     "macOS": {
       "signingIdentity": "-",
       "hardenedRuntime": true,
-      "entitlements": null
+      "entitlements": "Entitlements.plist"
     },
     "windows": {
       "nsis": {

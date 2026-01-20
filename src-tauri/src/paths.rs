@@ -56,19 +56,9 @@ pub fn get_character_prompt_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join(".character_prompt"))
 }
 
-/// Gets the deep research prompt file path
-pub fn get_deep_research_prompt_path() -> Result<PathBuf, String> {
-    get_app_data_dir().map(|p| p.join(".deep_research_prompt"))
-}
-
 /// Gets the dialogue prompt file path
 pub fn get_dialogue_prompt_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join(".dialogue_prompt"))
-}
-
-/// Gets the deep research cooldown timestamp file path
-pub fn get_deep_research_cooldown_path() -> Result<PathBuf, String> {
-    get_app_data_dir().map(|p| p.join(".deep_research_cooldown"))
 }
 
 /// Gets the hitbox configuration file path
