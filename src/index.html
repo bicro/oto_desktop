@@ -1479,21 +1479,27 @@
             <div class="form-row" id="apiKeySaved" style="display: none;">
                 <span class="saved-indicator">API KEY CONFIGURED</span>
             </div>
-            <div class="form-group" id="chatModelGroup" style="margin-top: 12px;">
-                <div class="form-label">Chat Model</div>
+            <div class="form-group" id="assistantModelGroup" style="margin-top: 12px;">
+                <div class="form-label">Assistant Model</div>
                 <div class="model-search-container">
-                    <input type="text" id="chatModelSearch" class="model-search-input" placeholder="Search models..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-                    <div id="chatModelDropdown" class="model-dropdown"></div>
+                    <input type="text" id="assistantModelSearch" class="model-search-input" placeholder="Select a model..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+                    <div id="assistantModelDropdown" class="model-dropdown"></div>
                 </div>
-                <div id="currentModelDisplay" class="form-hint"></div>
+            </div>
+            <div class="form-group" id="rpModelGroup" style="margin-top: 12px;">
+                <div class="form-label">RP Model</div>
+                <div class="model-search-container">
+                    <input type="text" id="rpModelSearch" class="model-search-input" placeholder="Select a model..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+                    <div id="rpModelDropdown" class="model-dropdown"></div>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- Model Section -->
+    <!-- Character Section -->
     <div class="section collapsible" id="modelSection">
         <div class="section-header">
-            <div class="section-label">Model</div>
+            <div class="section-label">Character</div>
             <span class="section-toggle">▼</span>
         </div>
         <div class="section-content">
@@ -1744,9 +1750,10 @@
         const saveKeyBtn = document.getElementById('saveKeyBtn');
         const apiKeyRow = document.getElementById('apiKeyRow');
         const apiKeySaved = document.getElementById('apiKeySaved');
-        const chatModelSearch = document.getElementById('chatModelSearch');
-        const chatModelDropdown = document.getElementById('chatModelDropdown');
-        const currentModelDisplay = document.getElementById('currentModelDisplay');
+        const assistantModelSearch = document.getElementById('assistantModelSearch');
+        const assistantModelDropdown = document.getElementById('assistantModelDropdown');
+        const rpModelSearch = document.getElementById('rpModelSearch');
+        const rpModelDropdown = document.getElementById('rpModelDropdown');
         let allModels = [];
         const systemPromptInput = document.getElementById('systemPromptInput');
         const characterPromptInput = document.getElementById('characterPromptInput');
@@ -1910,19 +1917,28 @@
                 allModels = await invoke('get_available_models');
                 const config = await invoke('get_llm_config_cmd');
 
-                // Show current model
-                const currentModel = allModels.find(m => m.id === config.chat_model);
-                currentModelDisplay.textContent = currentModel ? `Current: ${currentModel.name}` : `Current: ${config.chat_model}`;
+                // Show current assistant model in placeholder
+                const currentAssistant = allModels.find(m => m.id === config.assistant_model);
+                assistantModelSearch.placeholder = currentAssistant
+                    ? `${currentAssistant.name}${currentAssistant.supports_vision ? ' 👁' : ''}`
+                    : config.assistant_model;
 
-                renderModelDropdown(allModels);
+                // Show current RP model in placeholder
+                const currentRp = allModels.find(m => m.id === config.rp_model);
+                rpModelSearch.placeholder = currentRp
+                    ? `${currentRp.name}${currentRp.supports_vision ? ' 👁' : ''}`
+                    : config.rp_model;
+
+                renderModelDropdown(allModels, assistantModelDropdown);
+                renderModelDropdown(allModels, rpModelDropdown);
             } catch (err) {
                 console.error('Failed to load chat models:', err);
             }
         }
 
-        function renderModelDropdown(models) {
-            chatModelDropdown.innerHTML = models.map(m =>
-                `<div class="model-option" data-id="${m.id}">${m.name}</div>`
+        function renderModelDropdown(models, dropdown) {
+            dropdown.innerHTML = models.map(m =>
+                `<div class="model-option" data-id="${m.id}" data-vision="${m.supports_vision}">${m.name}${m.supports_vision ? ' <span style="opacity: 0.6">👁</span>' : ''}</div>`
             ).join('');
         }
 
@@ -2297,39 +2313,48 @@
             }
         });
 
-        // Model search - show dropdown on focus
-        chatModelSearch.addEventListener('focus', () => {
-            chatModelDropdown.classList.add('show');
-            renderModelDropdown(filterModels(chatModelSearch.value));
-        });
+        // Helper function to setup model dropdown
+        function setupModelDropdown(searchInput, dropdown, contextLevel) {
+            searchInput.addEventListener('focus', () => {
+                dropdown.classList.add('show');
+                renderModelDropdown(filterModels(searchInput.value), dropdown);
+            });
 
-        // Model search - filter on input
-        chatModelSearch.addEventListener('input', () => {
-            renderModelDropdown(filterModels(chatModelSearch.value));
-        });
+            searchInput.addEventListener('input', () => {
+                renderModelDropdown(filterModels(searchInput.value), dropdown);
+            });
 
-        // Model search - select on click
-        chatModelDropdown.addEventListener('click', async (e) => {
-            const option = e.target.closest('.model-option');
-            if (!option) return;
+            dropdown.addEventListener('click', async (e) => {
+                const option = e.target.closest('.model-option');
+                if (!option) return;
 
-            const modelId = option.dataset.id;
-            try {
-                await invoke('set_chat_model', { model: modelId });
-                const model = allModels.find(m => m.id === modelId);
-                currentModelDisplay.textContent = `Current: ${model.name}`;
-                chatModelSearch.value = '';
-                chatModelDropdown.classList.remove('show');
-                showToast('Model changed', 'success');
-            } catch (err) {
-                showToast('Failed to change model: ' + err, 'error');
-            }
-        });
+                const modelId = option.dataset.id;
+                const supportsVision = option.dataset.vision === 'true';
+                try {
+                    await invoke('set_model', { model: modelId, contextLevel });
+                    const model = allModels.find(m => m.id === modelId);
+                    searchInput.placeholder = `${model.name}${model.supports_vision ? ' 👁' : ''}`;
+                    searchInput.value = '';
+                    dropdown.classList.remove('show');
+                    showToast('Model changed', 'success');
+
+                    // Emit model-changed event for overlay
+                    await emit('model-changed', { modelId, contextLevel, supportsVision });
+                } catch (err) {
+                    showToast('Failed to change model: ' + err, 'error');
+                }
+            });
+        }
+
+        // Setup both model dropdowns
+        setupModelDropdown(assistantModelSearch, assistantModelDropdown, 0);
+        setupModelDropdown(rpModelSearch, rpModelDropdown, 1);
 
         // Model search - hide dropdown on click outside
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.model-search-container')) {
-                chatModelDropdown.classList.remove('show');
+                assistantModelDropdown.classList.remove('show');
+                rpModelDropdown.classList.remove('show');
             }
         });
 

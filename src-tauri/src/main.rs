@@ -163,17 +163,33 @@ fn save_model_config(config: &ModelConfig) -> Result<(), String> {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LLMConfig {
-    pub chat_model: String,
+    #[serde(default = "default_assistant_model")]
+    pub assistant_model: String,
+    #[serde(default = "default_rp_model")]
+    pub rp_model: String,
     pub openrouter_api_key: Option<String>,
     pub openai_api_key: Option<String>,
+    // Legacy field for migration
+    #[serde(skip_serializing, default)]
+    chat_model: Option<String>,
+}
+
+fn default_assistant_model() -> String {
+    "openai/chatgpt-4o-latest".to_string()
+}
+
+fn default_rp_model() -> String {
+    "aionlabs/aion-rp-llama-3.1-8b".to_string()
 }
 
 impl Default for LLMConfig {
     fn default() -> Self {
         Self {
-            chat_model: "anthropic/claude-3.5-sonnet".to_string(),
+            assistant_model: default_assistant_model(),
+            rp_model: default_rp_model(),
             openrouter_api_key: None,
             openai_api_key: None,
+            chat_model: None,
         }
     }
 }
@@ -183,7 +199,19 @@ fn load_llm_config() -> Result<LLMConfig, String> {
     if config_path.exists() {
         let content = std::fs::read_to_string(&config_path)
             .map_err(|e| format!("Failed to read LLM config: {}", e))?;
-        serde_json::from_str(&content).map_err(|e| format!("Failed to parse LLM config: {}", e))
+        let mut config: LLMConfig = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse LLM config: {}", e))?;
+
+        // Migration: if old chat_model exists, use it for assistant_model
+        if let Some(old_model) = config.chat_model.take() {
+            if config.assistant_model == default_assistant_model() {
+                config.assistant_model = old_model;
+            }
+            // Save migrated config
+            let _ = save_llm_config(&config);
+        }
+
+        Ok(config)
     } else {
         Ok(LLMConfig::default())
     }
@@ -788,6 +816,7 @@ async fn has_openai_key() -> Result<bool, String> {
 pub struct ModelOption {
     pub id: String,
     pub name: String,
+    pub supports_vision: bool,
 }
 
 #[command]
@@ -796,13 +825,31 @@ async fn get_llm_config_cmd() -> Result<LLMConfig, String> {
 }
 
 #[command]
-async fn set_chat_model(model: String) -> Result<(), String> {
-    info!("[set_chat_model] Setting chat model to: {}", model);
+async fn set_model(model: String, context_level: u8) -> Result<(), String> {
+    info!(
+        "[set_model] Setting model to: {} for context level: {}",
+        model, context_level
+    );
     let mut config = load_llm_config()?;
-    config.chat_model = model;
+    match context_level {
+        0 => config.assistant_model = model,
+        1 => config.rp_model = model,
+        _ => return Err(format!("Invalid context level: {}", context_level)),
+    }
     save_llm_config(&config)?;
-    info!("[set_chat_model] Chat model updated successfully");
+    info!("[set_model] Model updated successfully");
     Ok(())
+}
+
+#[command]
+async fn get_model_supports_vision(model_id: String) -> Result<bool, String> {
+    // Fetch models from OpenRouter API to check vision support
+    let models = get_available_models().await?;
+    Ok(models
+        .iter()
+        .find(|m| m.id == model_id)
+        .map(|m| m.supports_vision)
+        .unwrap_or(false))
 }
 
 #[command]
@@ -834,7 +881,22 @@ async fn get_available_models() -> Result<Vec<ModelOption>, String> {
         .filter_map(|m| {
             let id = m["id"].as_str()?.to_string();
             let name = m["name"].as_str().unwrap_or(&id).to_string();
-            Some(ModelOption { id, name })
+
+            // Check if model supports vision by looking at architecture.input_modalities
+            let supports_vision = m["architecture"]["input_modalities"]
+                .as_array()
+                .map(|modalities| {
+                    modalities
+                        .iter()
+                        .any(|mod_val| mod_val.as_str() == Some("image"))
+                })
+                .unwrap_or(false);
+
+            Some(ModelOption {
+                id,
+                name,
+                supports_vision,
+            })
         })
         .collect();
 
@@ -1027,16 +1089,23 @@ async fn call_openrouter_chat(
     messages: Vec<Value>,
     max_tokens: u32,
     stream: bool,
+    context_level: u8,
 ) -> Result<reqwest::Response, String> {
     let config = load_llm_config()?;
     let api_key = config
         .openrouter_api_key
         .ok_or_else(|| "OpenRouter API key not configured".to_string())?;
 
+    // Select model based on context level
+    let model = match context_level {
+        1 => config.rp_model,
+        _ => config.assistant_model,
+    };
+
     let client = reqwest::Client::new();
 
     let mut body = json!({
-        "model": config.chat_model,
+        "model": model,
         "messages": messages,
         "max_tokens": max_tokens
     });
@@ -1148,7 +1217,7 @@ async fn send_chat_message(
     }
 
     // Call OpenRouter API for main response
-    let response = call_openrouter_chat(messages, 1000, false).await?;
+    let response = call_openrouter_chat(messages, 1000, false, context_level).await?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
@@ -1274,7 +1343,7 @@ async fn send_chat_message_stream(
     };
 
     // Call OpenRouter API with streaming
-    let response = call_openrouter_chat(messages, 1000, true).await?;
+    let response = call_openrouter_chat(messages, 1000, true, context_level).await?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
@@ -2925,7 +2994,8 @@ fn main() {
             get_openai_key,
             has_openai_key,
             get_llm_config_cmd,
-            set_chat_model,
+            set_model,
+            get_model_supports_vision,
             get_available_models,
             save_system_prompt,
             get_system_prompt,

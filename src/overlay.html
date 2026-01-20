@@ -693,7 +693,11 @@
             /** Timestamp of last escape key press */
             lastEscapeTime: 0,
             /** Whether head tracking is enabled */
-            headTrackingEnabled: localStorage.getItem('headTrackingEnabled') === 'true'
+            headTrackingEnabled: localStorage.getItem('headTrackingEnabled') === 'true',
+            /** Whether assistant model supports vision */
+            assistantSupportsVision: true,
+            /** Whether RP model supports vision */
+            rpSupportsVision: true
         };
 
         // ============ Asset URL Resolution ============
@@ -1744,14 +1748,29 @@
          */
         function changeHistoryLevel(direction) {
             // Switch between tabs: 0 (Assistant) <-> 1 (Character)
+            let newLevel;
             if (direction === 'right' && AppState.activeContextLevel === 0) {
-                AppState.activeContextLevel = 1;
+                newLevel = 1;
             } else if (direction === 'left' && AppState.activeContextLevel === 1) {
-                AppState.activeContextLevel = 0;
+                newLevel = 0;
             } else {
                 return; // Already at the edge
             }
 
+            // Check if new model supports vision
+            const newSupportsVision = newLevel === 0
+                ? AppState.assistantSupportsVision
+                : AppState.rpSupportsVision;
+
+            // If screenshot is enabled but new model doesn't support vision, disable it
+            if (AppState.includeScreenshot && !newSupportsVision) {
+                AppState.includeScreenshot = false;
+                localStorage.setItem('screenshotEnabled', 'false');
+                updateStatus("Model doesn't support images - screenshot disabled", 'listening');
+                setTimeout(() => updateStatus('', ''), 2000);
+            }
+
+            AppState.activeContextLevel = newLevel;
             AppState.historyFocusIndex = -1;
             loadChatHistory().then(() => {
                 applyHistoryFilter();
@@ -1930,6 +1949,21 @@
         chatInput.addEventListener('keydown', async (e) => {
             if (e.key === 'Tab') {
                 e.preventDefault();
+
+                // Check if trying to enable screenshot
+                if (!AppState.includeScreenshot) {
+                    // Check if current model supports vision
+                    const currentSupportsVision = AppState.activeContextLevel === 0
+                        ? AppState.assistantSupportsVision
+                        : AppState.rpSupportsVision;
+
+                    if (!currentSupportsVision) {
+                        updateStatus("Model doesn't support images", 'listening');
+                        setTimeout(() => updateStatus('', ''), 2000);
+                        return;
+                    }
+                }
+
                 AppState.includeScreenshot = !AppState.includeScreenshot;
                 localStorage.setItem('screenshotEnabled', AppState.includeScreenshot);
                 updateScreenshotVisual();
@@ -2197,6 +2231,19 @@
                 // Set active level (exclusive, not toggle)
                 AppState.activeContextLevel = level;
 
+                // Check if new model supports vision
+                const newSupportsVision = level === 0
+                    ? AppState.assistantSupportsVision
+                    : AppState.rpSupportsVision;
+
+                // If screenshot is enabled but new model doesn't support vision, disable it
+                if (AppState.includeScreenshot && !newSupportsVision) {
+                    AppState.includeScreenshot = false;
+                    localStorage.setItem('screenshotEnabled', 'false');
+                    updateStatus("Model doesn't support images - screenshot disabled", 'listening');
+                    setTimeout(() => updateStatus('', ''), 2000);
+                }
+
                 AppState.historyFocusIndex = -1;
                 loadChatHistory().then(() => {
                     applyHistoryFilter();
@@ -2220,6 +2267,55 @@
         listen('show-chat-history', () => {
             showHistoryModal();
         });
+
+        // Listen for model changes from settings
+        listen('model-changed', (event) => {
+            const { modelId, contextLevel, supportsVision } = event.payload;
+            console.log('[Overlay] Model changed:', modelId, 'context:', contextLevel, 'vision:', supportsVision);
+
+            // Update vision capability for the changed context level
+            if (contextLevel === 0) {
+                AppState.assistantSupportsVision = supportsVision;
+            } else if (contextLevel === 1) {
+                AppState.rpSupportsVision = supportsVision;
+            }
+
+            // If this is the current context level and screenshot is enabled but model doesn't support vision
+            if (AppState.activeContextLevel === contextLevel && AppState.includeScreenshot && !supportsVision) {
+                AppState.includeScreenshot = false;
+                localStorage.setItem('screenshotEnabled', 'false');
+                updateScreenshotVisual();
+                updateStatus("Model doesn't support images - screenshot disabled", 'listening');
+                setTimeout(() => updateStatus('', ''), 2000);
+            }
+        });
+
+        // Initialize vision capability on load
+        async function initVisionCapability() {
+            try {
+                const config = await invoke('get_llm_config_cmd');
+                const assistantVision = await invoke('get_model_supports_vision', { modelId: config.assistant_model });
+                const rpVision = await invoke('get_model_supports_vision', { modelId: config.rp_model });
+
+                AppState.assistantSupportsVision = assistantVision;
+                AppState.rpSupportsVision = rpVision;
+
+                console.log('[Overlay] Vision capability initialized - Assistant:', assistantVision, 'RP:', rpVision);
+
+                // Check if current model doesn't support vision and screenshot is enabled
+                const currentSupportsVision = AppState.activeContextLevel === 0 ? assistantVision : rpVision;
+                if (AppState.includeScreenshot && !currentSupportsVision) {
+                    AppState.includeScreenshot = false;
+                    localStorage.setItem('screenshotEnabled', 'false');
+                    updateScreenshotVisual();
+                }
+            } catch (err) {
+                console.error('[Overlay] Failed to init vision capability:', err);
+            }
+        }
+
+        // Call init after a short delay to ensure everything is loaded
+        setTimeout(initVisionCapability, 500);
 
         // ============ UI Helpers ============
         function updateStatus(text, className) {
