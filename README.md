@@ -15,10 +15,9 @@ https://github.com/user-attachments/assets/001b865c-987d-4eb4-9187-47205b2d3fdb
 - **Live2D Character Overlay**: Animated character rendered using Live2D Cubism SDK
 - **AI Chat Integration**: Powered by OpenAI GPT models for intelligent conversations
 - **Screen Awareness**: Optionally capture screenshots to give the AI context about what you're working on
-- **Three Conversation Levels**:
-  - **Level 0 (Standard)**: General AI assistant with character commentary
-  - **Level 1 (Character)**: Direct dialogue with the character personality
-  - **Level 2 (Deep Think)**: Deep analysis and reflection mode
+- **Two Conversation Levels**:
+  - **Assistant**: General AI assistant with character commentary
+  - **Character**: Direct dialogue with the character personality
 - **Cross-Platform**: Works on macOS, Windows, and Linux
 - **Global Shortcuts**: Quick access keyboard shortcuts
 - **Head Tracking**: Character follows your cursor movement
@@ -82,26 +81,21 @@ This formats code, builds, runs clippy, and checks for sensitive files.
 
 | Key | Action |
 |-----|--------|
-| `Arrow Left/Right` | Switch between conversation levels (0, 1, 2) |
+| `Arrow Left/Right` | Switch between Assistant and Character modes |
 | `Arrow Up/Down` | Navigate through chat history |
-| `Enter` | Send message (or trigger Deep Think at Level 2) |
+| `Enter` | Send message |
 | `Escape` | Close history modal |
 
 ### Conversation Levels
 
-**Level 0 - Standard Mode**
+**Assistant Mode**
 - Chat with an AI assistant
 - Character provides additional commentary
 - Screenshots can be attached for context
 
-**Level 1 - Character Mode**
+**Character Mode**
 - Direct conversation with the character personality
 - More personal and conversational tone
-
-**Level 2 - Deep Think Mode**
-- Analytical and reflective responses
-- 6-hour cooldown between deep analysis sessions
-- Press Enter with empty input to trigger deep research
 
 ## Platform Notes
 

@@ -19,14 +19,6 @@ pub struct ChatResponse {
     pub character_comments: Option<Vec<String>>,
 }
 
-/// Response from the deep research trigger
-#[derive(Debug, Clone, Serialize)]
-pub struct DeepResearchResponse {
-    pub on_cooldown: bool,
-    pub remaining_seconds: u64,
-    pub main_response: String,
-}
-
 /// Version information for a saved texture
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextureVersion {

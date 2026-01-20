@@ -20,11 +20,11 @@ use std::io::{Read, Write as IoWrite};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+#[cfg(target_os = "windows")]
+use tauri::http::Response;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder};
 use tauri::{command, AppHandle, Emitter, Manager};
-#[cfg(target_os = "windows")]
-use tauri::http::Response;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 // rusqlite is now used in db.rs module
 use futures_util::StreamExt;
@@ -740,7 +740,6 @@ async fn get_character_prompt() -> Result<String, String> {
     }
 }
 
-
 #[command]
 async fn save_dialogue_prompt(prompt: String) -> Result<(), String> {
     let prompt_path = get_dialogue_prompt_path()?;
@@ -1135,13 +1134,18 @@ async fn send_chat_message_stream(
 
                     if let Some(json_str) = line.strip_prefix("data: ") {
                         if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
-                            if let Some(content) = json_value["choices"][0]["delta"]["content"].as_str() {
+                            if let Some(content) =
+                                json_value["choices"][0]["delta"]["content"].as_str()
+                            {
                                 full_content.push_str(content);
-                                let _ = app.emit("chat-stream-chunk", json!({
-                                    "chunk": content,
-                                    "role": response_role,
-                                    "context_level": context_level
-                                }));
+                                let _ = app.emit(
+                                    "chat-stream-chunk",
+                                    json!({
+                                        "chunk": content,
+                                        "role": response_role,
+                                        "context_level": context_level
+                                    }),
+                                );
                             }
                         }
                     }
@@ -1158,11 +1162,14 @@ async fn send_chat_message_stream(
     store_chat_message(&timestamp, response_role, &full_content, context_level)?;
 
     // Emit completion event
-    let _ = app.emit("chat-stream-done", json!({
-        "role": response_role,
-        "context_level": context_level,
-        "full_content": full_content.clone()
-    }));
+    let _ = app.emit(
+        "chat-stream-done",
+        json!({
+            "role": response_role,
+            "context_level": context_level,
+            "full_content": full_content.clone()
+        }),
+    );
 
     Ok(())
 }
@@ -2183,7 +2190,8 @@ async fn take_screenshot(app: AppHandle) -> Result<String, String> {
             let mut file = std::fs::File::create(&filepath)
                 .map_err(|e| format!("Failed to create screenshot file: {}", e))?;
             let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 85);
-            rgb_img.write_with_encoder(encoder)
+            rgb_img
+                .write_with_encoder(encoder)
                 .map_err(|e| format!("Failed to save screenshot: {}", e))?;
         }
     }
@@ -2313,10 +2321,10 @@ async fn take_screenshot_base64(app: AppHandle) -> Result<String, String> {
             return Err(format!("screencapture failed: {}", stderr));
         }
 
-        let bytes = std::fs::read(&temp_path)
-            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
+        let bytes =
+            std::fs::read(&temp_path).map_err(|e| format!("Failed to read screenshot: {}", e))?;
         let _ = std::fs::remove_file(&temp_path);
-        return Ok(BASE64.encode(&bytes));
+        Ok(BASE64.encode(&bytes))
     }
 
     #[cfg(target_os = "windows")]
@@ -2419,7 +2427,8 @@ async fn take_screenshot_base64(app: AppHandle) -> Result<String, String> {
             // Encode to JPEG in memory buffer
             let mut buffer = std::io::Cursor::new(Vec::new());
             let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, 85);
-            rgb_img.write_with_encoder(encoder)
+            rgb_img
+                .write_with_encoder(encoder)
                 .map_err(|e| format!("Failed to encode screenshot: {}", e))?;
 
             return Ok(BASE64.encode(buffer.into_inner()));
@@ -2494,8 +2503,7 @@ fn main() {
                     let path_str = uri.path();
 
                     // URL decode the path
-                    let decoded =
-                        urlencoding::decode(path_str).unwrap_or_else(|_| path_str.into());
+                    let decoded = urlencoding::decode(path_str).unwrap_or_else(|_| path_str.into());
 
                     // Strip query string if present (e.g., ?t=123456 cache buster)
                     let path_without_query = decoded.split('?').next().unwrap_or(&decoded);

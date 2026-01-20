@@ -799,9 +799,8 @@
             letter-spacing: 0.5px;
         }
 
-        .level-pill.all { background: rgba(0,0,0,0.08); color: var(--text-secondary); }
+        .level-pill.assistant { background: rgba(0,0,0,0.08); color: var(--text-secondary); }
         .level-pill.character { background: rgba(57,197,187,0.15); color: #2a9d8f; }
-        .level-pill.deep { background: rgba(138,43,226,0.15); color: #7b2cbf; }
 
         /* Shortcut display */
         .shortcut {
@@ -1156,7 +1155,7 @@
             transition: all 0.2s ease;
         }
 
-        .preview-level-pill.all {
+        .preview-level-pill.assistant {
             background: rgba(0,0,0,0.08);
             color: var(--text-secondary);
         }
@@ -1164,11 +1163,6 @@
         .preview-level-pill.character {
             background: rgba(57,197,187,0.15);
             color: #2a9d8f;
-        }
-
-        .preview-level-pill.deep {
-            background: rgba(138,43,226,0.15);
-            color: #7b2cbf;
         }
 
         /* Gallery navigation dots */
@@ -1212,7 +1206,7 @@
             box-shadow: 0 0 6px rgba(255, 149, 0, 0.4);
         }
 
-        [data-theme="dark"] .preview-level-pill.all {
+        [data-theme="dark"] .preview-level-pill.assistant {
             background: rgba(255,255,255,0.15);
             color: var(--text-secondary);
         }
@@ -1220,11 +1214,6 @@
         [data-theme="dark"] .preview-level-pill.character {
             background: rgba(57,197,187,0.3);
             color: #39c5bb;
-        }
-
-        [data-theme="dark"] .preview-level-pill.deep {
-            background: rgba(138,43,226,0.3);
-            color: #dda0dd;
         }
 
         /* Collapsible Sections */
@@ -1392,8 +1381,7 @@
                             <div class="preview-level-indicator" id="previewLevel3">
                                 <div class="preview-level-dash active" id="levelDash0"></div>
                                 <div class="preview-level-dash" id="levelDash1"></div>
-                                <div class="preview-level-dash" id="levelDash2"></div>
-                                <span class="preview-level-pill all" id="levelPill">All</span>
+                                <span class="preview-level-pill assistant" id="levelPill">Assistant</span>
                             </div>
                             <div class="preview-frame visible">
                                 <div class="preview-textbox">Type a message...</div>
@@ -1405,7 +1393,7 @@
                                 <div class="gallery-key" id="keyLeft">←</div>
                                 <div class="gallery-key" id="keyRight">→</div>
                             </div>
-                            <div class="gallery-slide-desc">All → Character → Deep Think</div>
+                            <div class="gallery-slide-desc">Assistant ↔ Character</div>
                         </div>
                     </div>
                 </div>
@@ -1527,11 +1515,6 @@
                 <div class="form-label" style="color: #39c5bb;">Character - Dialogue Prompt</div>
                 <textarea id="dialoguePromptInput" placeholder="Leave empty for default conversational style..."></textarea>
                 <div class="form-hint">Direct conversation AS the character, sees both AI responses and inner thoughts (Level 1)</div>
-            </div>
-            <div class="form-group" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
-                <div class="form-label">Deep Research Prompt</div>
-                <textarea id="deepResearchPromptInput" placeholder="Instructions for deep research mode that analyzes your conversations and provides insights..."></textarea>
-                <div class="form-hint">AI analyst mode (Level 2, 6hr cooldown)</div>
             </div>
             <div class="form-row">
                 <button class="btn btn-sm" id="savePromptsBtn">Save Prompts</button>
@@ -1705,7 +1688,6 @@
         const systemPromptInput = document.getElementById('systemPromptInput');
         const characterPromptInput = document.getElementById('characterPromptInput');
         const dialoguePromptInput = document.getElementById('dialoguePromptInput');
-        const deepResearchPromptInput = document.getElementById('deepResearchPromptInput');
         const savePromptsBtn = document.getElementById('savePromptsBtn');
         const promptsSaved = document.getElementById('promptsSaved');
         const historyBtn = document.getElementById('historyBtn');
@@ -1906,13 +1888,6 @@
             } catch (err) {
                 console.error('Failed to load dialogue prompt:', err);
             }
-
-            try {
-                const deepPrompt = await invoke('get_deep_research_prompt');
-                deepResearchPromptInput.value = deepPrompt;
-            } catch (err) {
-                console.error('Failed to load deep research prompt:', err);
-            }
         }
 
         // Save prompts
@@ -1921,7 +1896,6 @@
                 await invoke('save_system_prompt', { prompt: systemPromptInput.value.trim() });
                 await invoke('save_character_prompt', { prompt: characterPromptInput.value.trim() });
                 await invoke('save_dialogue_prompt', { prompt: dialoguePromptInput.value.trim() });
-                await invoke('save_deep_research_prompt', { prompt: deepResearchPromptInput.value.trim() });
                 promptsSaved.style.display = 'inline';
                 showToast('Prompts saved', 'success');
                 setTimeout(() => { promptsSaved.style.display = 'none'; }, 2000);
@@ -2269,7 +2243,6 @@
                 systemPromptInput.value = '';
                 characterPromptInput.value = '';
                 dialoguePromptInput.value = '';
-                deepResearchPromptInput.value = '';
                 hasApiKey = false;
                 characterToggleBtn.disabled = true;
                 setStatus('data cleared');
@@ -2621,20 +2594,17 @@
                 const keyRight = document.getElementById('keyRight');
                 const levelDash0 = document.getElementById('levelDash0');
                 const levelDash1 = document.getElementById('levelDash1');
-                const levelDash2 = document.getElementById('levelDash2');
                 const levelPill = document.getElementById('levelPill');
 
                 const levels = [
-                    { dash: 0, text: 'All', className: 'all' },
-                    { dash: 1, text: 'Character', className: 'character' },
-                    { dash: 2, text: 'Deep Think', className: 'deep' }
+                    { dash: 0, text: 'Assistant', className: 'assistant' },
+                    { dash: 1, text: 'Character', className: 'character' }
                 ];
 
                 function setLevel(index) {
                     const level = levels[index];
                     levelDash0.classList.toggle('active', level.dash === 0);
                     levelDash1.classList.toggle('active', level.dash === 1);
-                    levelDash2.classList.toggle('active', level.dash === 2);
                     levelPill.textContent = level.text;
                     levelPill.className = 'preview-level-pill ' + level.className;
                 }
@@ -2643,33 +2613,17 @@
                 keyLeft.classList.remove('animating');
                 keyRight.classList.remove('animating');
 
-                // 1/2/3/2/1 pattern: 4 phases cycling through all 3 levels
+                // 2-phase toggle: Assistant <-> Character
                 if (phase === 0) {
-                    // Phase 0: Press Right - move 0 -> 1
+                    // Phase 0: Press Right - move Assistant -> Character
                     setLevel(0);
                     setTimeout(() => keyRight.classList.add('animating'), 400);
                     setTimeout(() => {
                         keyRight.classList.remove('animating');
                         setLevel(1);
                     }, 700);
-                } else if (phase === 1) {
-                    // Phase 1: Press Right - move 1 -> 2
-                    setLevel(1);
-                    setTimeout(() => keyRight.classList.add('animating'), 400);
-                    setTimeout(() => {
-                        keyRight.classList.remove('animating');
-                        setLevel(2);
-                    }, 700);
-                } else if (phase === 2) {
-                    // Phase 2: Press Left - move 2 -> 1
-                    setLevel(2);
-                    setTimeout(() => keyLeft.classList.add('animating'), 400);
-                    setTimeout(() => {
-                        keyLeft.classList.remove('animating');
-                        setLevel(1);
-                    }, 700);
                 } else {
-                    // Phase 3: Press Left - move 1 -> 0
+                    // Phase 1: Press Left - move Character -> Assistant
                     setLevel(1);
                     setTimeout(() => keyLeft.classList.add('animating'), 400);
                     setTimeout(() => {
@@ -2688,8 +2642,8 @@
                     } else {
                         // Re-run current animation
                         const index = GalleryState.currentSlide;
-                        // Slide 4 uses 4 phases (1/2/3/2/1 pattern), others use 2 phases
-                        const phase = (index === 4) ? GalleryState.loopCount : (GalleryState.loopCount % 2);
+                        // All slides use 2 phases (toggle pattern)
+                        const phase = GalleryState.loopCount % 2;
                         switch (index) {
                             case 0: animateTaskbarClick(phase); break;
                             case 1: animateOpenChat(phase); break;
