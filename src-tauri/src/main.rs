@@ -179,7 +179,7 @@ fn default_assistant_model() -> String {
 }
 
 fn default_rp_model() -> String {
-    "aionlabs/aion-rp-llama-3.1-8b".to_string()
+    "openai/chatgpt-4o-latest".to_string()
 }
 
 impl Default for LLMConfig {
