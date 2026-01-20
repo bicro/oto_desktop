@@ -636,6 +636,56 @@
             outline: none;
         }
 
+        .model-search-container {
+            position: relative;
+        }
+
+        .model-search-input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg-primary);
+            font-family: inherit;
+            font-size: 11px;
+            color: var(--text-primary);
+            box-sizing: border-box;
+        }
+
+        .model-search-input:focus {
+            border-color: var(--accent-blue);
+            outline: none;
+        }
+
+        .model-dropdown {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            max-height: 200px;
+            overflow-y: auto;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+            z-index: 100;
+        }
+
+        .model-dropdown.show {
+            display: block;
+        }
+
+        .model-option {
+            padding: 8px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+
+        .model-option:hover {
+            background: var(--bg-secondary);
+        }
+
         /* Model source tabs */
         .model-source-tabs {
             display: flex;
@@ -1224,7 +1274,7 @@
         /* Collapsible Sections */
         .section.collapsible {
             padding: 0;
-            overflow: hidden;
+            overflow: visible;
         }
 
         .section-header {
@@ -1288,7 +1338,7 @@
             <div class="tutorial-step">
                 <div class="tutorial-step-title">1. API Key</div>
                 <div class="tutorial-step-desc">
-                    Get your key from <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com/api-keys</a>
+                    Get your key from <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a>
                 </div>
             </div>
 
@@ -1423,11 +1473,19 @@
         </div>
         <div class="section-content">
             <div class="form-row" id="apiKeyRow">
-                <input type="password" id="apiKeyInput" placeholder="OpenAI API Key" />
+                <input type="password" id="apiKeyInput" placeholder="OpenRouter API Key" />
                 <button class="btn btn-sm" id="saveKeyBtn">Save</button>
             </div>
             <div class="form-row" id="apiKeySaved" style="display: none;">
                 <span class="saved-indicator">API KEY CONFIGURED</span>
+            </div>
+            <div class="form-group" id="chatModelGroup" style="margin-top: 12px;">
+                <div class="form-label">Chat Model</div>
+                <div class="model-search-container">
+                    <input type="text" id="chatModelSearch" class="model-search-input" placeholder="Search models..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+                    <div id="chatModelDropdown" class="model-dropdown"></div>
+                </div>
+                <div id="currentModelDisplay" class="form-hint"></div>
             </div>
         </div>
     </div>
@@ -1686,6 +1744,10 @@
         const saveKeyBtn = document.getElementById('saveKeyBtn');
         const apiKeyRow = document.getElementById('apiKeyRow');
         const apiKeySaved = document.getElementById('apiKeySaved');
+        const chatModelSearch = document.getElementById('chatModelSearch');
+        const chatModelDropdown = document.getElementById('chatModelDropdown');
+        const currentModelDisplay = document.getElementById('currentModelDisplay');
+        let allModels = [];
         const systemPromptInput = document.getElementById('systemPromptInput');
         const characterPromptInput = document.getElementById('characterPromptInput');
         const dialoguePromptInput = document.getElementById('dialoguePromptInput');
@@ -1841,6 +1903,34 @@
                 console.error('Failed to load versions:', err);
                 versionGroup.style.display = 'none';
             }
+        }
+
+        async function loadChatModels() {
+            try {
+                allModels = await invoke('get_available_models');
+                const config = await invoke('get_llm_config_cmd');
+
+                // Show current model
+                const currentModel = allModels.find(m => m.id === config.chat_model);
+                currentModelDisplay.textContent = currentModel ? `Current: ${currentModel.name}` : `Current: ${config.chat_model}`;
+
+                renderModelDropdown(allModels);
+            } catch (err) {
+                console.error('Failed to load chat models:', err);
+            }
+        }
+
+        function renderModelDropdown(models) {
+            chatModelDropdown.innerHTML = models.map(m =>
+                `<div class="model-option" data-id="${m.id}">${m.name}</div>`
+            ).join('');
+        }
+
+        function filterModels(query) {
+            const q = query.toLowerCase();
+            return allModels.filter(m =>
+                m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)
+            );
         }
 
         // Button state update
@@ -2207,6 +2297,42 @@
             }
         });
 
+        // Model search - show dropdown on focus
+        chatModelSearch.addEventListener('focus', () => {
+            chatModelDropdown.classList.add('show');
+            renderModelDropdown(filterModels(chatModelSearch.value));
+        });
+
+        // Model search - filter on input
+        chatModelSearch.addEventListener('input', () => {
+            renderModelDropdown(filterModels(chatModelSearch.value));
+        });
+
+        // Model search - select on click
+        chatModelDropdown.addEventListener('click', async (e) => {
+            const option = e.target.closest('.model-option');
+            if (!option) return;
+
+            const modelId = option.dataset.id;
+            try {
+                await invoke('set_chat_model', { model: modelId });
+                const model = allModels.find(m => m.id === modelId);
+                currentModelDisplay.textContent = `Current: ${model.name}`;
+                chatModelSearch.value = '';
+                chatModelDropdown.classList.remove('show');
+                showToast('Model changed', 'success');
+            } catch (err) {
+                showToast('Failed to change model: ' + err, 'error');
+            }
+        });
+
+        // Model search - hide dropdown on click outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.model-search-container')) {
+                chatModelDropdown.classList.remove('show');
+            }
+        });
+
         // Delete saved version
         deleteVersionBtn.addEventListener('click', async () => {
             const versionId = versionSelect.value;
@@ -2335,6 +2461,7 @@
                 // Load texture preview and versions
                 loadTexturePreview();
                 loadVersions();
+                loadChatModels();
 
                 // Check if initialized
                 frontendLog('info', '[Init] Checking is_initialized...');

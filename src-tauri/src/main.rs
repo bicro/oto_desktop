@@ -807,16 +807,41 @@ async fn set_chat_model(model: String) -> Result<(), String> {
 
 #[command]
 async fn get_available_models() -> Result<Vec<ModelOption>, String> {
-    // Return a curated list of recommended models available on OpenRouter
-    Ok(vec![
-        ModelOption { id: "anthropic/claude-3.5-sonnet".to_string(), name: "Claude 3.5 Sonnet".to_string() },
-        ModelOption { id: "anthropic/claude-3-opus".to_string(), name: "Claude 3 Opus".to_string() },
-        ModelOption { id: "openai/gpt-4-turbo".to_string(), name: "GPT-4 Turbo".to_string() },
-        ModelOption { id: "openai/gpt-4o".to_string(), name: "GPT-4o".to_string() },
-        ModelOption { id: "openai/gpt-4o-mini".to_string(), name: "GPT-4o Mini".to_string() },
-        ModelOption { id: "google/gemini-pro-1.5".to_string(), name: "Gemini Pro 1.5".to_string() },
-        ModelOption { id: "meta-llama/llama-3.1-405b-instruct".to_string(), name: "Llama 3.1 405B".to_string() },
-    ])
+    // Fetch models from OpenRouter API
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://openrouter.ai/api/v1/models")
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch models: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("OpenRouter API error: {}", response.status()));
+    }
+
+    let json: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse models response: {}", e))?;
+
+    let models = json["data"]
+        .as_array()
+        .ok_or_else(|| "Invalid response format".to_string())?;
+
+    let mut result: Vec<ModelOption> = models
+        .iter()
+        .filter_map(|m| {
+            let id = m["id"].as_str()?.to_string();
+            let name = m["name"].as_str().unwrap_or(&id).to_string();
+            Some(ModelOption { id, name })
+        })
+        .collect();
+
+    // Sort by name for easier browsing
+    result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    Ok(result)
 }
 
 // ============ Prompt Commands ============
