@@ -207,6 +207,11 @@ fn load_transform_config() -> Result<TransformConfig, String> {
     }
 }
 
+#[tauri::command]
+fn quit_app() {
+    std::process::exit(0);
+}
+
 /// Maximum depth to search for model files in nested directories
 const MAX_MODEL_SEARCH_DEPTH: u32 = 3;
 
@@ -1502,17 +1507,7 @@ async fn reload_character(
     // Update state
     *state.overlay_visible.lock().unwrap() = true;
 
-    // Wait for page to fully load before emitting init-complete
-    println!("[Rust] Waiting for overlay page to load...");
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-    // Emit init-complete to trigger model loading
-    println!("[Rust] Emitting init-complete to load model");
-    overlay
-        .emit("init-complete", json!({}))
-        .map_err(|e| format!("Failed to emit init-complete: {}", e))?;
-
-    println!("[Rust] Overlay recreated successfully");
+    println!("[Rust] Overlay recreated successfully - DOMContentLoaded will trigger model load");
     Ok("Character reloaded!".to_string())
 }
 
@@ -2780,6 +2775,7 @@ fn main() {
             save_transform_config,
             load_transform_config,
             log_from_frontend,
+            quit_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

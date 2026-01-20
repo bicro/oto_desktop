@@ -1537,17 +1537,7 @@
                     await invoke('hide_overlay');
                     break;
                 case 'quit':
-                    // Use Tauri's process exit if available, otherwise close window
-                    try {
-                        if (window.__TAURI__.process?.exit) {
-                            await window.__TAURI__.process.exit(0);
-                        } else {
-                            // Fallback: close the window
-                            await getCurrentWindow().close();
-                        }
-                    } catch (e) {
-                        await getCurrentWindow().close();
-                    }
+                    await invoke('quit_app');
                     break;
             }
         });
@@ -2278,15 +2268,15 @@
             blinkFrame();
         }
 
-        // Listen for init-complete event from main window
-        listen('init-complete', () => {
-            frontendLog('info', '[Overlay] Init complete - loading model');
-            autoLoadModel();
-        });
-
         // Listen for reload-character event to hot-reload textures
         listen('reload-character', () => {
             frontendLog('info', '[Overlay] Reload character event received - reloading model');
+            autoLoadModel();
+        });
+
+        // Listen for init-complete event from main window (for first-launch after download)
+        listen('init-complete', () => {
+            frontendLog('info', '[Overlay] Init complete - loading model');
             autoLoadModel();
         });
 
@@ -2294,13 +2284,21 @@
         window.addEventListener('DOMContentLoaded', async () => {
             live2dOverlay.initApp();
             updateTooltips();
-            frontendLog('info', '[Overlay] Ready - auto-loading model');
-            // Auto-load model on page load (handles both initial load and reload cases)
-            autoLoadModel();
-
-            // Initialize hitbox canvas (but keep hidden)
             resizeHitboxCanvas();
 
+            // Check if model is already downloaded before attempting to load
+            // On first launch, model may not exist yet - init-complete will trigger load later
+            try {
+                const initialized = await invoke('is_initialized');
+                if (initialized) {
+                    frontendLog('info', '[Overlay] Ready - model exists, auto-loading');
+                    autoLoadModel();
+                } else {
+                    frontendLog('info', '[Overlay] Ready - waiting for model download (init-complete)');
+                }
+            } catch (err) {
+                frontendLog('error', '[Overlay] Failed to check initialization: ' + err);
+            }
         });
 
     </script>
