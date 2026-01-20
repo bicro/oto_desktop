@@ -2486,6 +2486,43 @@ async fn open_screenshots_folder() -> Result<(), String> {
     Ok(())
 }
 
+#[command]
+async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
+    let log_dir = app.path().app_log_dir()
+        .map_err(|e| format!("Failed to get log directory: {}", e))?;
+
+    // Create directory if it doesn't exist
+    std::fs::create_dir_all(&log_dir)
+        .map_err(|e| format!("Failed to create log directory: {}", e))?;
+
+    // Open in file manager
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&log_dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&log_dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&log_dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    Ok(())
+}
+
 // ============ Main ============
 
 fn main() {
@@ -2716,6 +2753,7 @@ fn main() {
             open_screen_recording_settings,
             take_screenshot,
             open_screenshots_folder,
+            open_logs_folder,
             save_api_key,
             get_api_key,
             has_api_key,

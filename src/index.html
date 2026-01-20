@@ -1464,23 +1464,6 @@
             <div id="modelProgress" style="display: none; margin-top: 12px; padding: 8px; background: var(--bg-primary); border-radius: 4px; font-size: 11px;">
                 <span id="modelProgressText">Downloading...</span>
             </div>
-        </div>
-    </div>
-
-    <!-- Behavior Section -->
-    <div class="section collapsible" id="behaviorSection">
-        <div class="section-header">
-            <div class="section-label">Behavior</div>
-            <span class="section-toggle">▼</span>
-        </div>
-        <div class="section-content">
-            <div class="form-row" style="align-items: center;">
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                    <input type="checkbox" id="headTrackingToggle" style="width: 14px; height: 14px;">
-                    <span>Head tracking follows mouse</span>
-                </label>
-            </div>
-            <div class="form-hint" style="margin-top: 4px;">Character head will follow your cursor when enabled</div>
 
             <!-- Character Transform -->
             <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
@@ -1533,18 +1516,37 @@
             <div class="data-actions">
                 <button class="btn btn-outline btn-sm" id="historyBtn">Chat History</button>
                 <button class="btn btn-outline btn-sm" id="screenshotsBtn">Screenshots</button>
+                <button class="btn btn-outline btn-sm" id="logsBtn">Open Logs</button>
             </div>
         </div>
     </div>
 
-    <!-- Character Section -->
-    <div class="section collapsible" id="characterSection">
+    <!-- Experimental Section -->
+    <div class="section collapsible" id="experimentalSection">
         <div class="section-header">
-            <div class="section-label">Character</div>
+            <div class="section-label">Experimental</div>
             <span class="section-toggle">▼</span>
         </div>
         <div class="section-content">
-            <div class="texture-preview" id="texturePreview" style="display: none;">
+            <!-- Head Tracking Toggle -->
+            <div class="form-row" style="align-items: center;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="headTrackingToggle" style="width: 14px; height: 14px;">
+                    <span>Head tracking follows mouse</span>
+                </label>
+            </div>
+            <div class="form-hint" style="margin-top: 4px;">Character head will follow your cursor when enabled</div>
+
+            <!-- Generate New Style -->
+            <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+                <div class="form-label">Generate New Style</div>
+                <input type="text" id="texturePromptInput" class="text-input" placeholder="e.g. Change hair color to purple" />
+                <button class="btn btn-sm" id="generateTextureBtn" style="margin-top: 8px;">Generate</button>
+                <div class="form-hint" style="margin-top: 4px;">Uses AI to modify character appearance</div>
+            </div>
+
+            <!-- Texture Preview (shown after generation) -->
+            <div class="texture-preview" id="texturePreview" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
                 <div class="preview-row">
                     <div class="preview-item">
                         <div class="preview-label">Original 00</div>
@@ -1573,12 +1575,6 @@
                 </select>
                 <button class="btn btn-sm btn-danger" id="deleteVersionBtn" style="margin-top: 8px;">Delete Selected</button>
             </div>
-            <div class="form-group">
-                <div class="form-label">Generate New Style</div>
-                <input type="text" id="texturePromptInput" class="text-input" placeholder="e.g. Change hair color to purple" />
-                <button class="btn btn-sm" id="generateTextureBtn" style="margin-top: 8px;">Generate</button>
-            </div>
-            <div class="form-hint">Uses AI to modify character appearance (experimental)</div>
         </div>
     </div>
 
@@ -1692,6 +1688,7 @@
         const promptsSaved = document.getElementById('promptsSaved');
         const historyBtn = document.getElementById('historyBtn');
         const screenshotsBtn = document.getElementById('screenshotsBtn');
+        const logsBtn = document.getElementById('logsBtn');
         const clearDataBtn = document.getElementById('clearDataBtn');
         const characterToggleBtn = document.getElementById('characterToggleBtn');
         const toastContainer = document.getElementById('toast-container');
@@ -2103,7 +2100,7 @@
 
         // Head tracking toggle
         const headTrackingToggle = document.getElementById('headTrackingToggle');
-        headTrackingToggle.checked = localStorage.getItem('headTrackingEnabled') !== 'false';
+        headTrackingToggle.checked = localStorage.getItem('headTrackingEnabled') === 'true';
         headTrackingToggle.addEventListener('change', async () => {
             const enabled = headTrackingToggle.checked;
             localStorage.setItem('headTrackingEnabled', enabled);
@@ -2144,6 +2141,15 @@
                 await invoke('open_screenshots_folder');
             } catch (err) {
                 showToast('Failed to open folder: ' + err, 'error');
+            }
+        });
+
+        // Logs folder
+        logsBtn.addEventListener('click', async () => {
+            try {
+                await invoke('open_logs_folder');
+            } catch (err) {
+                showToast('Failed to open logs folder: ' + err, 'error');
             }
         });
 
