@@ -122,6 +122,28 @@
             background: rgba(255, 255, 255, 0.1);
         }
 
+        [data-theme="dark"] .code-block {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        [data-theme="dark"] .inline-code {
+            background: rgba(255, 150, 100, 0.18);
+        }
+
+        [data-theme="dark"] .md-blockquote {
+            background: rgba(0, 102, 255, 0.1);
+            border-left-color: var(--accent-blue);
+        }
+
+        [data-theme="dark"] .md-table th {
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        [data-theme="dark"] .md-table tr:nth-child(even) {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
@@ -531,6 +553,158 @@
         .history-message pre code {
             background: transparent;
             padding: 0;
+        }
+
+        /* Enhanced Markdown Styles */
+        .md-p {
+            margin: 0 0 12px 0;
+            line-height: 1.6;
+        }
+
+        .md-h2 {
+            font-size: 18px;
+            font-weight: 600;
+            margin: 16px 0 8px 0;
+            color: var(--text-primary);
+        }
+
+        .md-h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin: 14px 0 6px 0;
+            color: var(--text-primary);
+        }
+
+        .md-h4 {
+            font-size: 14px;
+            font-weight: 600;
+            margin: 12px 0 6px 0;
+            color: var(--text-primary);
+        }
+
+        .md-h5 {
+            font-size: 13px;
+            font-weight: 600;
+            margin: 10px 0 4px 0;
+            color: var(--text-primary);
+        }
+
+        .code-block {
+            position: relative;
+            background: rgba(0, 0, 0, 0.05);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin: 12px 0;
+            overflow: hidden;
+        }
+
+        .code-block pre {
+            margin: 0;
+            padding: 12px;
+            overflow-x: auto;
+            background: transparent;
+        }
+
+        .code-block code {
+            background: transparent;
+            padding: 0;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .code-lang {
+            position: absolute;
+            top: 4px;
+            right: 8px;
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .inline-code {
+            background: rgba(255, 150, 100, 0.12);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+            font-size: 11px;
+        }
+
+        .md-blockquote {
+            border-left: 3px solid var(--accent-blue);
+            background: rgba(0, 102, 255, 0.05);
+            padding: 8px 12px;
+            margin: 12px 0;
+            font-style: italic;
+            border-radius: 0 4px 4px 0;
+            color: var(--text-secondary);
+        }
+
+        .md-link {
+            color: var(--accent-blue);
+            text-decoration: none;
+            transition: text-decoration 0.15s ease;
+        }
+
+        .md-link:hover {
+            text-decoration: underline;
+        }
+
+        .md-hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 16px 0;
+        }
+
+        .md-table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 12px 0;
+            font-size: 12px;
+        }
+
+        .md-table th,
+        .md-table td {
+            border: 1px solid var(--border);
+            padding: 8px 12px;
+            text-align: left;
+        }
+
+        .md-table th {
+            background: rgba(0, 0, 0, 0.03);
+            font-weight: 600;
+        }
+
+        .md-table tr:nth-child(even) {
+            background: rgba(0, 0, 0, 0.02);
+        }
+
+        .md-list {
+            margin: 8px 0;
+            padding-left: 0;
+            list-style: none;
+        }
+
+        .md-li {
+            margin: 4px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+
+        .md-li::before {
+            content: '•';
+            position: absolute;
+            left: 6px;
+            color: var(--text-muted);
+        }
+
+        .md-li[data-level="1"] { padding-left: 40px; }
+        .md-li[data-level="2"] { padding-left: 60px; }
+        .md-li[data-level="3"] { padding-left: 80px; }
+
+        .md-li[data-ordered]::before {
+            content: attr(data-index) '.';
+            left: 2px;
         }
 
         /* Toast notifications */
@@ -1846,22 +2020,128 @@
             characterToggleBtn.textContent = isOverlayVisible ? 'Hide Character' : 'Show Character';
         }
 
-        // Markdown parser (same as overlay)
+        // Enhanced Markdown parser (same as overlay)
         function parseMarkdown(text) {
+            // Escape HTML first
             let html = text
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;');
 
+            // Code blocks with language label
             html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-                return `<pre><code>${code.trim()}</code></pre>`;
+                const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
+                return `<div class="code-block">${langLabel}<pre><code>${code.trim()}</code></pre></div>`;
             });
-            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-            html = html.replace(/^### (.*$)/gm, '<strong>$1</strong>');
-            html = html.replace(/^## (.*$)/gm, '<strong>$1</strong>');
-            html = html.replace(/^# (.*$)/gm, '<strong>$1</strong>');
+
+            // Inline code
+            html = html.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+
+            // Headers (#### ### ## #)
+            html = html.replace(/^#### (.*$)/gm, '<h5 class="md-h5">$1</h5>');
+            html = html.replace(/^### (.*$)/gm, '<h4 class="md-h4">$1</h4>');
+            html = html.replace(/^## (.*$)/gm, '<h3 class="md-h3">$1</h3>');
+            html = html.replace(/^# (.*$)/gm, '<h2 class="md-h2">$1</h2>');
+
+            // Horizontal rules
+            html = html.replace(/^(---|\*\*\*|___)$/gm, '<hr class="md-hr">');
+
+            // Blockquotes
+            html = html.replace(/^&gt; (.*)$/gm, '<blockquote class="md-blockquote">$1</blockquote>');
+            // Merge consecutive blockquotes
+            html = html.replace(/<\/blockquote>\n<blockquote class="md-blockquote">/g, '<br>');
+
+            // Links [text](url)
+            html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="md-link" target="_blank" rel="noopener">$1</a>');
+
+            // Bold (**text** or __text__)
             html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-            html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+            html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+
+            // Italic (*text* or _text_) - using word boundaries
+            html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+            html = html.replace(/(?<!_)_([^_]+)_(?!_)/g, '<em>$1</em>');
+
+            // Tables
+            html = html.replace(/(?:^|\n)((?:\|[^\n]+\|\n)+)/g, (match, tableContent) => {
+                const rows = tableContent.trim().split('\n');
+                if (rows.length < 2) return match;
+
+                // Check for separator row
+                const sepIndex = rows.findIndex(r => /^\|[\s\-:|]+\|$/.test(r));
+                if (sepIndex === -1) return match;
+
+                let tableHtml = '<table class="md-table">';
+                rows.forEach((row, i) => {
+                    if (i === sepIndex) return; // Skip separator
+                    const cells = row.split('|').filter(c => c.trim() !== '');
+                    const tag = i < sepIndex ? 'th' : 'td';
+                    tableHtml += '<tr>' + cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
+                });
+                tableHtml += '</table>';
+                return tableHtml;
+            });
+
+            // Lists with nesting support
+            const lines = html.split('\n');
+            let inList = false;
+            let listItems = [];
+            let orderedCounter = 0;
+            let isOrdered = false;
+
+            const processedLines = [];
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const unorderedMatch = line.match(/^(\s*)([-*+]) (.+)$/);
+                const orderedMatch = line.match(/^(\s*)(\d+)\. (.+)$/);
+
+                if (unorderedMatch || orderedMatch) {
+                    const match = unorderedMatch || orderedMatch;
+                    const indent = match[1].length;
+                    const level = Math.floor(indent / 2);
+                    const content = unorderedMatch ? match[3] : match[3];
+
+                    if (!inList) {
+                        inList = true;
+                        isOrdered = !!orderedMatch;
+                        orderedCounter = 0;
+                    }
+
+                    orderedCounter++;
+                    const attrs = isOrdered
+                        ? `data-level="${level}" data-ordered="true" data-index="${orderedCounter}"`
+                        : `data-level="${level}"`;
+                    listItems.push(`<li class="md-li" ${attrs}>${content}</li>`);
+                } else {
+                    if (inList && listItems.length > 0) {
+                        processedLines.push(`<ul class="md-list">${listItems.join('')}</ul>`);
+                        listItems = [];
+                        inList = false;
+                        orderedCounter = 0;
+                    }
+                    processedLines.push(line);
+                }
+            }
+
+            if (listItems.length > 0) {
+                processedLines.push(`<ul class="md-list">${listItems.join('')}</ul>`);
+            }
+
+            html = processedLines.join('\n');
+
+            // Paragraphs - wrap text blocks
+            const parts = html.split(/\n\n+/);
+            html = parts.map(p => {
+                p = p.trim();
+                if (!p) return '';
+                if (p.startsWith('<h') || p.startsWith('<div class="code-block"') ||
+                    p.startsWith('<ul') || p.startsWith('<ol') || p.startsWith('<table') ||
+                    p.startsWith('<hr') || p.startsWith('<blockquote')) {
+                    return p;
+                }
+                return `<p class="md-p">${p.replace(/\n/g, '<br>')}</p>`;
+            }).join('');
 
             return html;
         }
