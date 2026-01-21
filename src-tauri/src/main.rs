@@ -9,7 +9,7 @@ mod prompts;
 
 // Re-exports for internal use
 use db::{clear_chat_history_internal, get_chat_history_internal, store_chat_message};
-use models::{ChatMessage, ChatResponse, TextureVersion};
+use models::{ChatMessage, ChatResponse};
 use paths::*;
 use prompts::*;
 
@@ -764,14 +764,22 @@ fn get_builtin_api_key() -> Option<String> {
 
 #[command]
 async fn get_api_key() -> Result<Option<String>, String> {
-    // Return OpenRouter API key from LLM config
+    // First check for built-in key (compile-time embedded)
+    if let Some(builtin_key) = get_builtin_api_key() {
+        return Ok(Some(builtin_key));
+    }
+    // Fall back to user-configured key in LLM config
     let config = load_llm_config()?;
     Ok(config.openrouter_api_key)
 }
 
 #[command]
 async fn has_api_key() -> Result<bool, String> {
-    // Check for OpenRouter API key in LLM config
+    // Check for built-in key first
+    if get_builtin_api_key().is_some() {
+        return Ok(true);
+    }
+    // Fall back to checking LLM config
     let config = load_llm_config()?;
     Ok(config.openrouter_api_key.is_some())
 }
@@ -1092,8 +1100,9 @@ async fn call_openrouter_chat(
     context_level: u8,
 ) -> Result<reqwest::Response, String> {
     let config = load_llm_config()?;
-    let api_key = config
-        .openrouter_api_key
+    // Use built-in key if available, otherwise use user-configured key
+    let api_key = get_builtin_api_key()
+        .or(config.openrouter_api_key)
         .ok_or_else(|| "OpenRouter API key not configured".to_string())?;
 
     // Select model based on context level
@@ -1435,249 +1444,6 @@ async fn clear_all_data() -> Result<(), String> {
 }
 
 #[command]
-async fn generate_texture(prompt: String) -> Result<String, String> {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-    use image::GenericImageView;
-
-    // Load model config for dynamic paths
-    let config = load_model_config()?;
-    let texture_folder = config
-        .texture_folder
-        .ok_or_else(|| "No texture folder configured for this model".to_string())?;
-    let texture_dir = get_texture_dir_for_model(&config.folder, &texture_folder)?;
-    let originals_dir = get_originals_dir_for_model(&config.folder, &texture_folder)?;
-
-    // Get OpenAI API key for image editing
-    let api_key = get_openai_key()
-        .await?
-        .ok_or_else(|| "OpenAI API key required for image editing".to_string())?;
-
-    // Discover texture files dynamically
-    let texture_files: Vec<String> = std::fs::read_dir(&texture_dir)
-        .map_err(|e| format!("Failed to read texture directory: {}", e))?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "png"))
-        .filter(|e| !e.path().is_dir())
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .collect();
-
-    if texture_files.is_empty() {
-        return Err("No texture files found in model".to_string());
-    }
-
-    for texture_file in &texture_files {
-        let texture_path = texture_dir.join(texture_file);
-        let original_path = originals_dir.join(texture_file);
-
-        // Ensure we have originals backed up first
-        if !original_path.exists() {
-            if texture_path.exists() {
-                std::fs::create_dir_all(&originals_dir)
-                    .map_err(|e| format!("Failed to create originals dir: {}", e))?;
-                std::fs::copy(&texture_path, &original_path)
-                    .map_err(|e| format!("Failed to backup {}: {}", texture_file, e))?;
-            } else {
-                continue;
-            }
-        }
-
-        // Load the original image
-        let img = image::open(&original_path)
-            .map_err(|e| format!("Failed to load {}: {}", texture_file, e))?;
-
-        let (orig_width, orig_height) = img.dimensions();
-        println!(
-            "[Texture] Processing {} - original dimensions: {}x{}",
-            texture_file, orig_width, orig_height
-        );
-
-        // Downscale to 1024x1024 for OpenAI
-        println!("[Texture] Downscaling to 1024x1024...");
-        let downscaled = img.resize_exact(1024, 1024, image::imageops::FilterType::Lanczos3);
-
-        // Encode as PNG bytes
-        let mut png_bytes: Vec<u8> = Vec::new();
-        downscaled
-            .write_to(
-                &mut std::io::Cursor::new(&mut png_bytes),
-                image::ImageFormat::Png,
-            )
-            .map_err(|e| format!("Failed to encode image: {}", e))?;
-
-        // Create multipart form for OpenAI API
-        let form = reqwest::multipart::Form::new()
-            .text("model", "gpt-image-1.5")
-            .text(
-                "prompt",
-                format!(
-                    "This is a texture atlas for a Live2D anime character. {}. \
-                CRITICAL: Keep every element in its EXACT position. \
-                Preserve all black outlines/lineart. \
-                Only modify what the prompt asks for. \
-                Maintain the same art style and quality.",
-                    prompt
-                ),
-            )
-            .text("size", "1024x1024")
-            .text("background", "transparent")
-            .text("output_format", "png")
-            .part(
-                "image[]",
-                reqwest::multipart::Part::bytes(png_bytes)
-                    .file_name("texture.png")
-                    .mime_str("image/png")
-                    .map_err(|e| format!("Failed to set mime type: {}", e))?,
-            );
-
-        // Call OpenAI API
-        println!("[Texture] Sending to OpenAI...");
-        let client = reqwest::Client::new();
-        let response = client
-            .post("https://api.openai.com/v1/images/edits")
-            .header("Authorization", format!("Bearer {}", api_key))
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|e| format!("OpenAI API failed for {}: {}", texture_file, e))?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(format!(
-                "OpenAI API error for {}: {}",
-                texture_file, error_text
-            ));
-        }
-
-        let response_json: Value = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse response for {}: {}", texture_file, e))?;
-
-        println!("[Texture] Response received, extracting image...");
-
-        // Extract base64 image from response
-        let image_data = response_json["data"][0]["b64_json"]
-            .as_str()
-            .ok_or_else(|| format!("No image in response for {}", texture_file))?;
-
-        // Decode the edited image
-        let decoded = BASE64
-            .decode(image_data)
-            .map_err(|e| format!("Failed to decode {}: {}", texture_file, e))?;
-
-        let edited_img = image::load_from_memory(&decoded)
-            .map_err(|e| format!("Failed to load edited {}: {}", texture_file, e))?;
-
-        // Upscale back to original dimensions (2048x2048)
-        println!(
-            "[Texture] Upscaling back to {}x{}...",
-            orig_width, orig_height
-        );
-        let upscaled = edited_img.resize_exact(
-            orig_width,
-            orig_height,
-            image::imageops::FilterType::Lanczos3,
-        );
-
-        // Save the upscaled image
-        upscaled
-            .save(&texture_path)
-            .map_err(|e| format!("Failed to save {}: {}", texture_file, e))?;
-
-        println!("[Texture] {} completed successfully", texture_file);
-    }
-
-    // Save this generation as a version
-    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let version_dir = get_versions_dir_for_model(&config.folder, &texture_folder)?.join(&timestamp);
-    std::fs::create_dir_all(&version_dir)
-        .map_err(|e| format!("Failed to create version dir: {}", e))?;
-
-    // Copy all processed textures to the version folder
-    for texture_file in &texture_files {
-        let src = texture_dir.join(texture_file);
-        let dst = version_dir.join(texture_file);
-        if src.exists() {
-            std::fs::copy(&src, &dst)
-                .map_err(|e| format!("Failed to copy {} to version: {}", texture_file, e))?;
-        }
-    }
-
-    // Save metadata
-    let metadata = json!({
-        "timestamp": timestamp,
-        "prompt": prompt,
-        "created_at": chrono::Utc::now().to_rfc3339()
-    });
-    std::fs::write(version_dir.join("metadata.json"), metadata.to_string())
-        .map_err(|e| format!("Failed to save metadata: {}", e))?;
-
-    Ok("Texture generated successfully!".to_string())
-}
-
-#[derive(Serialize)]
-pub struct TexturePaths {
-    pub current_textures: Vec<String>,
-    pub original_textures: Vec<String>,
-    pub has_original: bool,
-    pub texture_enabled: bool,
-}
-
-#[command]
-async fn get_texture_paths() -> Result<TexturePaths, String> {
-    let config = load_model_config()?;
-
-    // Check if texture editing is enabled for this model
-    let texture_folder = match &config.texture_folder {
-        Some(folder) => folder.clone(),
-        None => {
-            return Ok(TexturePaths {
-                current_textures: vec![],
-                original_textures: vec![],
-                has_original: false,
-                texture_enabled: false,
-            });
-        }
-    };
-
-    let texture_dir = get_texture_dir_for_model(&config.folder, &texture_folder)?;
-    let originals_dir = get_originals_dir_for_model(&config.folder, &texture_folder)?;
-
-    // Discover current textures
-    let current_textures: Vec<String> = if texture_dir.exists() {
-        std::fs::read_dir(&texture_dir)
-            .map_err(|e| format!("Failed to read texture directory: {}", e))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().is_some_and(|ext| ext == "png"))
-            .filter(|e| !e.path().is_dir())
-            .map(|e| e.path().to_string_lossy().to_string())
-            .collect()
-    } else {
-        vec![]
-    };
-
-    // Discover original textures
-    let original_textures: Vec<String> = if originals_dir.exists() {
-        std::fs::read_dir(&originals_dir)
-            .map_err(|e| format!("Failed to read originals directory: {}", e))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().is_some_and(|ext| ext == "png"))
-            .filter(|e| !e.path().is_dir())
-            .map(|e| e.path().to_string_lossy().to_string())
-            .collect()
-    } else {
-        vec![]
-    };
-
-    Ok(TexturePaths {
-        has_original: !original_textures.is_empty(),
-        current_textures,
-        original_textures,
-        texture_enabled: true,
-    })
-}
-
-#[command]
 async fn reload_character(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
@@ -1747,139 +1513,6 @@ async fn reload_character(
 
     println!("[Rust] Overlay recreated successfully - DOMContentLoaded will trigger model load");
     Ok("Character reloaded!".to_string())
-}
-
-// TextureVersion struct is in models.rs
-
-#[command]
-async fn get_texture_versions() -> Result<Vec<TextureVersion>, String> {
-    let config = load_model_config()?;
-    let texture_folder = config
-        .texture_folder
-        .ok_or_else(|| "No texture folder configured".to_string())?;
-
-    let versions_dir = get_versions_dir_for_model(&config.folder, &texture_folder)?;
-    let originals_dir = get_originals_dir_for_model(&config.folder, &texture_folder)?;
-
-    let mut versions = Vec::new();
-
-    // Add generated versions
-    if versions_dir.exists() {
-        for entry in std::fs::read_dir(&versions_dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            if entry.path().is_dir() {
-                let id = entry.file_name().to_string_lossy().to_string();
-                let metadata_path = entry.path().join("metadata.json");
-                let (created_at, prompt) = if metadata_path.exists() {
-                    let content = std::fs::read_to_string(&metadata_path).unwrap_or_default();
-                    let json: Value = serde_json::from_str(&content).unwrap_or(json!({}));
-                    (
-                        json["created_at"].as_str().unwrap_or(&id).to_string(),
-                        json["prompt"].as_str().map(|s| s.to_string()),
-                    )
-                } else {
-                    (id.clone(), None)
-                };
-                versions.push(TextureVersion {
-                    id,
-                    created_at,
-                    prompt,
-                });
-            }
-        }
-    }
-
-    versions.sort_by(|a, b| b.id.cmp(&a.id)); // Newest first
-
-    // Add "original" as the last option if originals exist
-    if originals_dir.exists() {
-        // Check if any png files exist in originals
-        let has_originals = std::fs::read_dir(&originals_dir)
-            .ok()
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .any(|e| e.path().extension().is_some_and(|ext| ext == "png"))
-            })
-            .unwrap_or(false);
-
-        if has_originals {
-            versions.push(TextureVersion {
-                id: "original".to_string(),
-                created_at: "Original".to_string(),
-                prompt: Some("Original textures".to_string()),
-            });
-        }
-    }
-
-    Ok(versions)
-}
-
-#[command]
-async fn apply_texture_version(version_id: String) -> Result<String, String> {
-    let config = load_model_config()?;
-    let texture_folder = config
-        .texture_folder
-        .ok_or_else(|| "No texture folder configured".to_string())?;
-
-    let texture_dir = get_texture_dir_for_model(&config.folder, &texture_folder)?;
-
-    // Handle "original" as a special case
-    let source_dir = if version_id == "original" {
-        get_originals_dir_for_model(&config.folder, &texture_folder)?
-    } else {
-        get_versions_dir_for_model(&config.folder, &texture_folder)?.join(&version_id)
-    };
-
-    if !source_dir.exists() {
-        return Err("Version not found".to_string());
-    }
-
-    // Discover and copy all texture files from the source
-    for entry in
-        std::fs::read_dir(&source_dir).map_err(|e| format!("Failed to read source: {}", e))?
-    {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if entry.path().extension().is_some_and(|ext| ext == "png") {
-            let file_name = entry.file_name();
-            let dst = texture_dir.join(&file_name);
-            std::fs::copy(entry.path(), &dst)
-                .map_err(|e| format!("Failed to apply {:?}: {}", file_name, e))?;
-        }
-    }
-
-    Ok(format!(
-        "Applied {}",
-        if version_id == "original" {
-            "original textures"
-        } else {
-            &version_id
-        }
-    ))
-}
-
-#[command]
-async fn delete_texture_version(version_id: String) -> Result<String, String> {
-    // Prevent deleting the original
-    if version_id == "original" {
-        return Err("Cannot delete original textures".to_string());
-    }
-
-    let config = load_model_config()?;
-    let texture_folder = config
-        .texture_folder
-        .ok_or_else(|| "No texture folder configured".to_string())?;
-
-    let versions_dir = get_versions_dir_for_model(&config.folder, &texture_folder)?;
-    let version_path = versions_dir.join(&version_id);
-
-    if !version_path.exists() {
-        return Err("Version not found".to_string());
-    }
-
-    std::fs::remove_dir_all(&version_path).map_err(|e| format!("Failed to delete: {}", e))?;
-
-    Ok("Version deleted".to_string())
 }
 
 // ============ App State ============
@@ -3008,12 +2641,7 @@ fn main() {
             get_chat_history,
             clear_chat_history,
             clear_all_data,
-            generate_texture,
-            get_texture_paths,
             reload_character,
-            get_texture_versions,
-            apply_texture_version,
-            delete_texture_version,
             save_hitbox,
             load_hitbox,
             clear_hitbox,

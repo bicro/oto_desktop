@@ -85,27 +85,3 @@ pub fn get_overlay_scale_path() -> Result<PathBuf, String> {
 pub fn get_transform_config_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join(".transform_config.json"))
 }
-
-/// Gets the texture directory path for a specific model
-pub fn get_texture_dir_for_model(
-    model_folder: &str,
-    texture_folder: &str,
-) -> Result<PathBuf, String> {
-    get_models_dir().map(|p| p.join(model_folder).join(texture_folder))
-}
-
-/// Gets the originals backup directory path for a specific model
-pub fn get_originals_dir_for_model(
-    model_folder: &str,
-    texture_folder: &str,
-) -> Result<PathBuf, String> {
-    get_texture_dir_for_model(model_folder, texture_folder).map(|p| p.join("originals"))
-}
-
-/// Gets the texture versions directory path for a specific model
-pub fn get_versions_dir_for_model(
-    model_folder: &str,
-    texture_folder: &str,
-) -> Result<PathBuf, String> {
-    get_texture_dir_for_model(model_folder, texture_folder).map(|p| p.join("versions"))
-}

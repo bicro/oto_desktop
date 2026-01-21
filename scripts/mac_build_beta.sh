@@ -66,7 +66,7 @@ echo "[\$(date +%H:%M:%S)] [START] Building for: \$USERNAME"
 
 {
     CARGO_TARGET_DIR="\$USER_TARGET_DIR" \\
-    OPENAI_API_KEY="\$API_KEY" \\
+    OPENROUTER_API_KEY="\$API_KEY" \\
     bunx tauri build --target universal-apple-darwin 2>&1
 
     DMG_SOURCE="\$USER_TARGET_DIR/universal-apple-darwin/release/bundle/dmg/Oto Desktop_0.1.0_universal.dmg"
