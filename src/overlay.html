@@ -707,42 +707,7 @@
             /** Whether RP model supports vision */
             rpSupportsVision: true,
             /** Shortcut toggle state: 0=hidden, 1=visible-unfocused, 2=visible-focused */
-            shortcutState: 0,
-            /** Whether emotional reaction sounds are enabled */
-            emotionalSoundsEnabled: localStorage.getItem('emotionalSoundsEnabled') !== 'false',
-            /** Volume for emotional sounds (0-1) */
-            emotionalSoundsVolume: parseFloat(localStorage.getItem('emotionalSoundsVolume') || '0.5')
-        };
-
-        // ============ Emotional Sounds Manager ============
-        const EmotionalSounds = {
-            sounds: [
-                'laugh_1.mp3', 'laugh_2.mp3',
-                'hmm_1.mp3', 'hmm_2.mp3',
-                'sigh_1.mp3',
-                'gasp_1.mp3',
-                'excited_1.mp3', 'excited_2.mp3'
-            ],
-            triggerChance: 0.7, // 70% chance to play
-
-            playRandom() {
-                // Check if enabled
-                if (!AppState.emotionalSoundsEnabled) return;
-
-                // 70% random chance check
-                if (Math.random() > this.triggerChance) return;
-
-                // Pick random sound
-                const soundFile = this.sounds[Math.floor(Math.random() * this.sounds.length)];
-                const soundUrl = getAssetUrl(`sounds/${soundFile}`);
-
-                // Play the sound
-                const audio = new Audio(soundUrl);
-                audio.volume = AppState.emotionalSoundsVolume;
-                audio.play().catch(err => {
-                    console.warn('[EmotionalSounds] Failed to play:', err.message);
-                });
-            }
+            shortcutState: 0
         };
 
         // ============ Asset URL Resolution ============
@@ -1228,18 +1193,6 @@
                 live2dOverlay.setParameter('ParamAngleY', 0);
                 live2dOverlay.setParameter('ParamBodyAngleX', 0);
             }
-        });
-
-        // Listen for emotional sounds toggle from settings
-        listen('emotional-sounds-changed', (event) => {
-            AppState.emotionalSoundsEnabled = event.payload.enabled;
-            localStorage.setItem('emotionalSoundsEnabled', event.payload.enabled);
-        });
-
-        // Listen for emotional sounds volume change from settings
-        listen('emotional-sounds-volume-changed', (event) => {
-            AppState.emotionalSoundsVolume = event.payload.volume;
-            localStorage.setItem('emotionalSoundsVolume', event.payload.volume);
         });
 
         // Listen for transform edit toggle from settings
@@ -2164,7 +2117,6 @@
 
                 // Track streaming content
                 let assistantContent = '';
-                let isFirstChunk = true;
 
                 scrollHistoryToBottom();
 
@@ -2173,11 +2125,6 @@
                     const { chunk, role } = event.payload;
 
                     if (role === 'character' && contextLevel === 1) {
-                        // Play emotional sound on first chunk (character mode only)
-                        if (isFirstChunk) {
-                            EmotionalSounds.playRandom();
-                            isFirstChunk = false;
-                        }
                         // Character DIALOGUE (level 1)
                         assistantContent += chunk;
                         const el = document.getElementById('streaming-message');

@@ -1605,24 +1605,6 @@
                 </label>
             </div>
             <div class="form-hint" style="margin-top: 4px;">Character head will follow your cursor when enabled</div>
-
-            <!-- Emotional Sounds Toggle -->
-            <div class="form-row" style="align-items: center; margin-top: 16px;">
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                    <input type="checkbox" id="emotionalSoundsToggle" style="width: 14px; height: 14px;">
-                    <span>Emotional reaction sounds</span>
-                </label>
-            </div>
-            <div class="form-hint" style="margin-top: 4px;">Plays random sounds (laughs, sighs, hmm) when character responds</div>
-
-            <!-- Emotional Sounds Volume -->
-            <div class="form-row" style="align-items: center; margin-top: 8px;">
-                <label style="display: flex; align-items: center; gap: 8px; flex: 1;">
-                    <span style="min-width: 60px;">Volume</span>
-                    <input type="range" id="emotionalSoundsVolume" min="0" max="1" step="0.1" value="0.5" style="flex: 1;">
-                    <span id="emotionalSoundsVolumeLabel" style="min-width: 40px; text-align: right;">50%</span>
-                </label>
-            </div>
         </div>
     </div>
 
@@ -2123,28 +2105,6 @@
             const enabled = headTrackingToggle.checked;
             localStorage.setItem('headTrackingEnabled', enabled);
             await emit('head-tracking-changed', { enabled });
-        });
-
-        // Emotional sounds toggle
-        const emotionalSoundsToggle = document.getElementById('emotionalSoundsToggle');
-        emotionalSoundsToggle.checked = localStorage.getItem('emotionalSoundsEnabled') !== 'false';
-        emotionalSoundsToggle.addEventListener('change', async () => {
-            const enabled = emotionalSoundsToggle.checked;
-            localStorage.setItem('emotionalSoundsEnabled', enabled);
-            await emit('emotional-sounds-changed', { enabled });
-        });
-
-        // Emotional sounds volume
-        const emotionalSoundsVolumeSlider = document.getElementById('emotionalSoundsVolume');
-        const emotionalSoundsVolumeLabel = document.getElementById('emotionalSoundsVolumeLabel');
-        const savedVolume = parseFloat(localStorage.getItem('emotionalSoundsVolume') || '0.5');
-        emotionalSoundsVolumeSlider.value = savedVolume;
-        emotionalSoundsVolumeLabel.textContent = Math.round(savedVolume * 100) + '%';
-        emotionalSoundsVolumeSlider.addEventListener('input', async () => {
-            const volume = parseFloat(emotionalSoundsVolumeSlider.value);
-            emotionalSoundsVolumeLabel.textContent = Math.round(volume * 100) + '%';
-            localStorage.setItem('emotionalSoundsVolume', volume);
-            await emit('emotional-sounds-volume-changed', { volume });
         });
 
         // Character transform controls
