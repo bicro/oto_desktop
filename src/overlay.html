@@ -89,6 +89,7 @@
             flex-direction: column;
             z-index: 2000;
             -webkit-app-region: no-drag;
+            cursor: default;
         }
 
         .chat-history {
@@ -352,11 +353,18 @@
             justify-content: space-between;
             align-items: center;
             padding: 10px 14px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.15);
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             color: white;
             font-size: 14px;
             flex-shrink: 0;
+            cursor: grab;
+            background: #1a1a1a;
+            border-radius: 16px 16px 0 0;
+        }
+
+        .history-header:active {
+            cursor: grabbing;
         }
 
         .history-header button {
@@ -366,6 +374,7 @@
             font-size: 16px;
             cursor: pointer;
             padding: 2px 6px;
+            -webkit-app-region: no-drag;
         }
 
         .history-content {
@@ -374,6 +383,7 @@
             padding: 12px;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             min-height: 100px;
+            cursor: text;
         }
 
         .history-message {
@@ -640,6 +650,7 @@
         .chat-tabs {
             display: flex;
             gap: 4px;
+            -webkit-app-region: no-drag;
         }
 
         .chat-tab {
@@ -655,6 +666,7 @@
             cursor: pointer;
             transition: all 0.15s ease;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            -webkit-app-region: no-drag;
         }
 
         .chat-tab:hover {
@@ -2549,6 +2561,14 @@
         document.getElementById('closeHistoryBtn').onclick = () => {
             hideHistoryModal();
         };
+
+        // Make history header draggable
+        document.querySelector('.history-header').addEventListener('mousedown', async (e) => {
+            // Don't drag if clicking on buttons or tabs
+            if (e.target.closest('button') || e.target.closest('.chat-tab')) return;
+            const win = getCurrentWindow();
+            await win.startDragging();
+        });
 
         // Tab click handlers - exclusive selection (not toggles)
         document.querySelectorAll('.chat-tab').forEach(tab => {
