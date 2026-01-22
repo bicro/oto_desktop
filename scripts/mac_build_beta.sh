@@ -7,14 +7,8 @@ CSV_FILE="$PROJECT_ROOT/beta_testers.csv"
 OUTPUT_DIR="$PROJECT_ROOT/beta_builds"
 BUILD_TEMP_DIR="$PROJECT_ROOT/.beta_build_temp"
 
-# Number of parallel builds (default: 3)
-CPU_CORES=$(sysctl -n hw.ncpu)
-MAX_PARALLEL=${MAX_PARALLEL:-3}
-
 echo "=========================================="
-echo "Parallel Beta Build Script"
-echo "CPU cores: $CPU_CORES"
-echo "Max parallel builds: $MAX_PARALLEL"
+echo "Beta Build Script"
 echo "=========================================="
 
 # Create output and temp directories
@@ -89,52 +83,27 @@ done
 TOTAL_USERS=$(tail -n +2 "$CSV_FILE" | wc -l | tr -d ' ')
 echo "Total users to build: $TOTAL_USERS"
 echo ""
-echo "Starting parallel builds..."
+echo "Starting builds..."
 echo "=========================================="
 
-# Run builds in parallel using background jobs with a semaphore
-RUNNING_JOBS=0
+# Run builds sequentially
 COMPLETED=0
 FAILED=0
-
-# Array to track PIDs
-declare -a PIDS=()
-declare -a USERNAMES=()
+CURRENT=0
 
 for script in "$JOB_DIR"/build_*.sh; do
     username=$(basename "$script" | sed 's/build_//;s/.sh//')
+    CURRENT=$((CURRENT + 1))
 
-    # Wait if we've hit max parallel jobs
-    while [ $RUNNING_JOBS -ge $MAX_PARALLEL ]; do
-        # Wait for any job to complete
-        for i in "${!PIDS[@]}"; do
-            if ! kill -0 "${PIDS[$i]}" 2>/dev/null; then
-                wait "${PIDS[$i]}" 2>/dev/null && COMPLETED=$((COMPLETED + 1)) || FAILED=$((FAILED + 1))
-                unset 'PIDS[i]'
-                unset 'USERNAMES[i]'
-                RUNNING_JOBS=$((RUNNING_JOBS - 1))
-            fi
-        done
-        # Compact arrays
-        PIDS=("${PIDS[@]}")
-        USERNAMES=("${USERNAMES[@]}")
-        sleep 1
-    done
+    echo "Building: $username ($CURRENT/$TOTAL_USERS)"
 
-    # Start new job
-    bash "$script" &
-    PIDS+=($!)
-    USERNAMES+=("$username")
-    RUNNING_JOBS=$((RUNNING_JOBS + 1))
-
-    echo "Queued: $username (running: $RUNNING_JOBS, completed: $COMPLETED, failed: $FAILED)"
-done
-
-# Wait for remaining jobs
-echo ""
-echo "Waiting for remaining builds to complete..."
-for pid in "${PIDS[@]}"; do
-    wait "$pid" 2>/dev/null && COMPLETED=$((COMPLETED + 1)) || FAILED=$((FAILED + 1))
+    if bash "$script"; then
+        COMPLETED=$((COMPLETED + 1))
+        echo "  -> Success (completed: $COMPLETED, failed: $FAILED)"
+    else
+        FAILED=$((FAILED + 1))
+        echo "  -> Failed (completed: $COMPLETED, failed: $FAILED)"
+    fi
 done
 
 echo ""

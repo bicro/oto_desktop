@@ -129,14 +129,22 @@
             transform: translateY(0);
         }
 
-        body:hover .chat-input-bar {
+        body.hover-enabled:hover .chat-input-bar {
             opacity: 1;
             transform: translateY(0);
         }
 
-        .chat-input-bar:focus-within {
+        body:not(.input-hidden) .chat-input-bar:focus-within {
             opacity: 1;
             transform: translateY(0);
+        }
+
+        /* Hide input bar when in character-only mode (State 1) */
+        body.input-hidden .chat-input-bar {
+            opacity: 0 !important;
+            transform: translateY(20px) !important;
+            pointer-events: none;
+            transition: none !important;
         }
 
         .chat-input-bar input {
@@ -318,7 +326,7 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
 
-        body:hover .status-indicator {
+        body.hover-enabled:hover .status-indicator {
             opacity: 1;
         }
 
@@ -742,7 +750,7 @@
 
     </style>
 </head>
-<body>
+<body class="input-hidden">
     <canvas id="hitboxCanvas"></canvas>
     <canvas id="live2dCanvas"></canvas>
     <div class="hitbox-instructions" id="hitboxInstructions">
@@ -886,7 +894,9 @@
             /** Whether assistant model supports vision */
             assistantSupportsVision: true,
             /** Whether RP model supports vision */
-            rpSupportsVision: true
+            rpSupportsVision: true,
+            /** Shortcut toggle state: 0=hidden, 1=visible-unfocused, 2=visible-focused */
+            shortcutState: 0
         };
 
         // ============ Asset URL Resolution ============
@@ -1868,6 +1878,26 @@
         // Set platform-specific placeholder on init
         chatInput.placeholder = defaultPlaceholder;
 
+        // Sync shortcut state with focus/blur events
+        chatInput.addEventListener('focus', () => {
+            if (AppState.shortcutState === 1) {
+                AppState.shortcutState = 2;
+                document.body.classList.remove('input-hidden');
+            }
+        });
+        chatInput.addEventListener('blur', () => {
+            if (AppState.shortcutState === 2) {
+                AppState.shortcutState = 1;
+                // Temporarily disable hover to show character-only state
+                document.body.classList.remove('hover-enabled');
+                setTimeout(() => {
+                    if (AppState.shortcutState === 1) {
+                        document.body.classList.add('hover-enabled');
+                    }
+                }, 300);
+            }
+        });
+
         // NOTE: State variables are now in AppState object at top of file
 
         /**
@@ -2074,6 +2104,8 @@
         }
 
         function openTextbox() {
+            document.body.classList.remove('input-hidden');
+            document.body.classList.add('hover-enabled');  // Ensure hover enabled when opening
             updateScreenshotVisual(); // Apply saved state
             chatInput.focus();
         }
@@ -2082,14 +2114,47 @@
             chatInput.blur();
         }
 
-        listen('toggle-textbox', () => {
-            const isHistoryOpen = historyModal.classList.contains('visible');
+        // State 0 → State 1: Character just shown
+        listen('shortcut-show-character', () => {
+            AppState.shortcutState = 1;
+            closeTextbox();
+            // Enable hover after delay - prevents flicker if mouse already hovering
+            setTimeout(() => {
+                document.body.classList.remove('input-hidden');
+                document.body.classList.add('hover-enabled');
+            }, 200);
+        });
+
+        // State 1 → State 2 OR State 2 → State 0
+        listen('shortcut-cycle-state', () => {
             const isFocused = document.activeElement === chatInput;
 
-            if (isFocused && !isHistoryOpen) {
-                closeTextbox();
-            } else {
+            if (!isFocused) {
+                // State 1 → State 2: Focus input
+                AppState.shortcutState = 2;
                 openTextbox();
+            } else {
+                // State 2 → State 0: Hide character
+                AppState.shortcutState = 0;
+                document.body.classList.add('input-hidden');
+                document.body.classList.remove('hover-enabled');  // Disable hover before hiding
+                closeTextbox();
+                invoke('hide_overlay');
+            }
+        });
+
+        // Sync state on external visibility changes (e.g., tray menu)
+        listen('overlay-visibility-changed', (event) => {
+            if (!event.payload.visible) {
+                AppState.shortcutState = 0;
+                document.body.classList.add('input-hidden');
+                document.body.classList.remove('hover-enabled');  // Disable hover when hiding
+            } else if (AppState.shortcutState === 0) {
+                AppState.shortcutState = 1;
+                setTimeout(() => {
+                    document.body.classList.remove('input-hidden');
+                    document.body.classList.add('hover-enabled');  // Enable hover after delay
+                }, 200);
             }
         });
 
