@@ -2576,20 +2576,23 @@ fn main() {
                         && (shortcut.matches(Modifiers::ALT, Code::Space)
                             || shortcut.matches(Modifiers::SUPER, Code::Space))
                     {
-                        // Show overlay if hidden
                         let is_visible = {
                             let state = app.state::<AppState>();
                             let visible = *state.overlay_visible.lock().unwrap();
                             visible
                         };
+
                         if !is_visible {
+                            // State 0 → State 1: Show character only
                             toggle_overlay_sync(app);
+                            let _ = app.emit("shortcut-show-character", ());
+                        } else {
+                            // State 1 or 2: Let frontend cycle
+                            if let Some(window) = app.get_webview_window("overlay") {
+                                let _ = window.set_focus();
+                            }
+                            let _ = app.emit("shortcut-cycle-state", ());
                         }
-                        // Focus the overlay window so keyboard input works
-                        if let Some(window) = app.get_webview_window("overlay") {
-                            let _ = window.set_focus();
-                        }
-                        let _ = app.emit("toggle-textbox", ());
                     }
                 })
                 .build(),
