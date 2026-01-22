@@ -2077,15 +2077,39 @@
         let userNearBottom = true;
         const SCROLL_THRESHOLD = 50; // pixels from bottom to consider "at bottom"
 
+        // Track the user message element for the current streaming response
+        let currentUserMessageElement = null;
+
         historyContent.addEventListener('scroll', () => {
             const { scrollTop, scrollHeight, clientHeight } = historyContent;
             userNearBottom = scrollHeight - scrollTop - clientHeight < SCROLL_THRESHOLD;
         });
 
         // Helper function to scroll history to bottom (only if user is near bottom)
+        // When streaming, stops scrolling once the user's message reaches the top
         function scrollHistoryToBottom(force = false) {
             if (force || userNearBottom) {
-                historyContent.scrollTop = historyContent.scrollHeight;
+                // If we have a user message to keep visible during streaming
+                if (currentUserMessageElement) {
+                    const containerRect = historyContent.getBoundingClientRect();
+                    const messageRect = currentUserMessageElement.getBoundingClientRect();
+
+                    // Calculate how far the user message is from the top of the container
+                    const messageTopRelativeToContainer = messageRect.top - containerRect.top;
+
+                    // If the message is still visible (not at the very top yet), we can scroll more
+                    // Allow scrolling until the message is near the top (with a small margin)
+                    const topMargin = 10;
+
+                    if (messageTopRelativeToContainer > topMargin) {
+                        // Message still has room to move up - scroll to bottom
+                        historyContent.scrollTop = historyContent.scrollHeight;
+                    }
+                    // else: message is at or past the top - don't scroll further
+                } else {
+                    // No user message tracking - scroll normally to bottom
+                    historyContent.scrollTop = historyContent.scrollHeight;
+                }
                 userNearBottom = true;
             }
         }
@@ -2383,6 +2407,9 @@
                 userDiv.setAttribute('data-context-level', contextLevel);
                 historyContent.appendChild(userDiv);
 
+                // Track this user message for scroll limiting during streaming
+                currentUserMessageElement = userDiv;
+
                 // Scroll to bottom (force since user just sent a message)
                 scrollHistoryToBottom(true);
 
@@ -2459,6 +2486,8 @@
                     // Clean up streaming IDs
                     const streamEl = document.getElementById('streaming-message');
                     if (streamEl) streamEl.removeAttribute('id');
+                    // Clear the user message tracking so future scrolls work normally
+                    currentUserMessageElement = null;
                 }
             }
         });
