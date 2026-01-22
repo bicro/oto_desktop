@@ -147,6 +147,14 @@
             transition: none !important;
         }
 
+        /* Show input bar when chat history is visible, even in input-hidden mode */
+        body.input-hidden .chat-history.visible ~ .chat-input-bar {
+            opacity: 1 !important;
+            transform: translateY(0) !important;
+            pointer-events: auto;
+            border-radius: 0 0 24px 24px;
+        }
+
         .chat-input-bar input {
             flex: 1;
             min-width: 0;
