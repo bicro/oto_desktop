@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -204,23 +204,6 @@
             display: flex;
             align-items: center;
             gap: 16px;
-        }
-
-        .theme-toggle {
-            background: none;
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            padding: 6px 10px;
-            cursor: pointer;
-            color: var(--text-secondary);
-            font-size: 14px;
-            transition: all 0.15s ease;
-            line-height: 1;
-        }
-
-        .theme-toggle:hover {
-            background: var(--bg-secondary);
-            color: var(--text-primary);
         }
 
         .character-toggle {
@@ -1497,7 +1480,6 @@
         <div class="logo">Oto Desktop</div>
         <div class="header-right">
             <button class="character-toggle" id="characterToggleBtn" title="Show/Hide Character" disabled>Show Character</button>
-            <button class="theme-toggle" id="themeToggle" title="Toggle dark/light mode"></button>
             <div class="status">
                 <span class="status-dot" id="statusDot"></span>
                 <span id="statusText">initializing</span>
@@ -1767,6 +1749,23 @@
         </div>
     </div>
 
+    <!-- Startup Section -->
+    <div class="section collapsible" id="startupSection">
+        <div class="section-header">
+            <div class="section-label">Startup</div>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
+            <div class="form-row" style="align-items: center;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="launchOnStartupToggle" style="width: 14px; height: 14px;">
+                    <span>Launch on startup</span>
+                </label>
+            </div>
+            <div class="form-hint" style="margin-top: 4px;">Start Oto automatically when you turn on your computer</div>
+        </div>
+    </div>
+
     <!-- Experimental Section -->
     <div class="section collapsible" id="experimentalSection">
         <div class="section-header">
@@ -1796,6 +1795,17 @@
                 <button class="btn btn-danger btn-sm" id="clearDataBtn">Clear All Data</button>
                 <div class="form-hint">Deletes history, API key, and all settings</div>
             </div>
+        </div>
+    </div>
+
+    <!-- Quit App Section -->
+    <div class="section" id="quitSection">
+        <div class="section-header">
+            <div class="section-label">Quit Application</div>
+        </div>
+        <div class="section-content">
+            <button class="btn btn-danger btn-sm" id="quitAppBtn">Quit</button>
+            <div class="form-hint">Close the application completely</div>
         </div>
     </div>
 
@@ -1862,25 +1872,6 @@
             }
         }
 
-        // Theme toggle functionality
-        const themeToggle = document.getElementById('themeToggle');
-        const savedTheme = localStorage.getItem('theme') || 'dark';
-        document.documentElement.setAttribute('data-theme', savedTheme);
-        updateThemeIcon();
-
-        themeToggle.addEventListener('click', () => {
-            const current = document.documentElement.getAttribute('data-theme');
-            const next = current === 'dark' ? 'light' : 'dark';
-            document.documentElement.setAttribute('data-theme', next);
-            localStorage.setItem('theme', next);
-            updateThemeIcon();
-        });
-
-        function updateThemeIcon() {
-            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            themeToggle.textContent = isDark ? '\u2600' : '\u263E';
-        }
-
         // Elements
         const statusDot = document.getElementById('statusDot');
         const statusText = document.getElementById('statusText');
@@ -1902,6 +1893,7 @@
         const screenshotsBtn = document.getElementById('screenshotsBtn');
         const logsBtn = document.getElementById('logsBtn');
         const clearDataBtn = document.getElementById('clearDataBtn');
+        const quitAppBtn = document.getElementById('quitAppBtn');
         const characterToggleBtn = document.getElementById('characterToggleBtn');
         const toastContainer = document.getElementById('toast-container');
         const clearModal = document.getElementById('clearModal');
@@ -2390,6 +2382,26 @@
             await emit('head-tracking-changed', { enabled });
         });
 
+        // Launch on startup toggle
+        const launchOnStartupToggle = document.getElementById('launchOnStartupToggle');
+        (async () => {
+            try {
+                const enabled = await invoke('get_autostart_enabled');
+                launchOnStartupToggle.checked = enabled;
+            } catch (e) {
+                console.error('Failed to get autostart status:', e);
+            }
+        })();
+        launchOnStartupToggle.addEventListener('change', async () => {
+            try {
+                await invoke('set_autostart_enabled', { enabled: launchOnStartupToggle.checked });
+            } catch (e) {
+                console.error('Failed to set autostart:', e);
+                // Revert the toggle on error
+                launchOnStartupToggle.checked = !launchOnStartupToggle.checked;
+            }
+        });
+
         // Character transform controls
         const editTransformBtn = document.getElementById('editTransformBtn');
         const resetTransformBtn = document.getElementById('resetTransformBtn');
@@ -2484,6 +2496,11 @@
         // Clear data modal
         clearDataBtn.addEventListener('click', () => {
             clearModal.classList.add('visible');
+        });
+
+        // Quit app button
+        quitAppBtn.addEventListener('click', async () => {
+            await invoke('quit_app');
         });
 
         clearCancelBtn.addEventListener('click', () => {
