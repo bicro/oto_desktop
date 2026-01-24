@@ -2414,6 +2414,21 @@ async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[command]
+fn is_debug_mode() -> bool {
+    cfg!(debug_assertions)
+}
+
+#[command]
+async fn open_overlay_devtools(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("overlay") {
+        window.open_devtools();
+        Ok(())
+    } else {
+        Err("Overlay window not found".to_string())
+    }
+}
+
 // ============ Main ============
 
 fn main() {
@@ -2683,6 +2698,8 @@ fn main() {
             quit_app,
             get_autostart_enabled,
             set_autostart_enabled,
+            is_debug_mode,
+            open_overlay_devtools,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
