@@ -1852,9 +1852,11 @@
             }
         });
 
-        // Track clicks for double-click detection
+        // Track for double-click and drag detection
         let lastClickTime = 0;
-        let dragTimeout = null;
+        let dragStartPos = null;
+        let isDragging = false;
+        const DRAG_THRESHOLD = 5; // pixels
 
         document.body.addEventListener('mousedown', async (event) => {
             // Hide context menu on any click outside of it
@@ -1875,44 +1877,39 @@
             if (event.target.closest('.textbox-container')) return;
             if (event.target.closest('.context-menu')) return;
 
-            // Only drag if inside polygon (or no polygon defined)
+            // Only allow drag if inside polygon (or no polygon defined)
             // AND not in transform edit mode
             if (!live2dOverlay.transformEditMode &&
                 (hitboxPoints.length < 3 || isPointInPolygon(event.clientX, event.clientY, hitboxPoints))) {
-                const now = Date.now();
-                const isDoubleClick = (now - lastClickTime) < 300;
-                lastClickTime = now;
-
-                // If this might be a double-click, delay dragging
-                if (isDoubleClick) {
-                    // Don't start dragging - let dblclick handler take over
-                    return;
-                }
-
-                // Delay drag start to allow double-click detection
-                const win = getCurrentWindow();
-                dragTimeout = setTimeout(() => {
-                    win.startDragging();
-                }, 150);
+                // Record starting position for movement detection
+                dragStartPos = { x: event.clientX, y: event.clientY };
+                isDragging = false;
+                lastClickTime = Date.now();
             }
         });
 
-        // Cancel pending drag on mouseup (for quick clicks)
-        document.body.addEventListener('mouseup', () => {
-            if (dragTimeout) {
-                clearTimeout(dragTimeout);
-                dragTimeout = null;
+        document.body.addEventListener('mousemove', async (event) => {
+            // Check if we should start dragging based on movement
+            if (dragStartPos && !isDragging) {
+                const dx = event.clientX - dragStartPos.x;
+                const dy = event.clientY - dragStartPos.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance > DRAG_THRESHOLD) {
+                    isDragging = true;
+                    const win = getCurrentWindow();
+                    win.startDragging();
+                }
             }
+        });
+
+        document.body.addEventListener('mouseup', () => {
+            dragStartPos = null;
+            isDragging = false;
         });
 
         // Double-click character to focus chat input
         document.body.addEventListener('dblclick', (event) => {
-            // Cancel any pending drag
-            if (dragTimeout) {
-                clearTimeout(dragTimeout);
-                dragTimeout = null;
-            }
-
             // Don't interfere with hitbox editing
             if (hitboxEditMode) return;
 
