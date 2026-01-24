@@ -2577,6 +2577,7 @@
             applyHistoryFilter(); // Apply filter based on current level (0 on re-open)
             // Scroll to bottom after everything is loaded (force since opening modal)
             scrollHistoryToBottom(true);
+            chatInput.focus();
         }
 
         function hideHistoryModal() {
