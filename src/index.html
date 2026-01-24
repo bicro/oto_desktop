@@ -1799,6 +1799,17 @@
         </div>
     </div>
 
+    <!-- Quit App Section -->
+    <div class="section" id="quitSection">
+        <div class="section-header">
+            <div class="section-label">Quit Application</div>
+        </div>
+        <div class="section-content">
+            <button class="btn btn-danger btn-sm" id="quitAppBtn">Quit</button>
+            <div class="form-hint">Close the application completely</div>
+        </div>
+    </div>
+
     <!-- Toast Container -->
     <div id="toast-container"></div>
 
@@ -1902,6 +1913,7 @@
         const screenshotsBtn = document.getElementById('screenshotsBtn');
         const logsBtn = document.getElementById('logsBtn');
         const clearDataBtn = document.getElementById('clearDataBtn');
+        const quitAppBtn = document.getElementById('quitAppBtn');
         const characterToggleBtn = document.getElementById('characterToggleBtn');
         const toastContainer = document.getElementById('toast-container');
         const clearModal = document.getElementById('clearModal');
@@ -2484,6 +2496,11 @@
         // Clear data modal
         clearDataBtn.addEventListener('click', () => {
             clearModal.classList.add('visible');
+        });
+
+        // Quit app button
+        quitAppBtn.addEventListener('click', async () => {
+            await invoke('quit_app');
         });
 
         clearCancelBtn.addEventListener('click', () => {
