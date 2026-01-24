@@ -2384,12 +2384,14 @@
 
         // Launch on startup toggle
         const launchOnStartupToggle = document.getElementById('launchOnStartupToggle');
-        try {
-            const enabled = await invoke('get_autostart_enabled');
-            launchOnStartupToggle.checked = enabled;
-        } catch (e) {
-            console.error('Failed to get autostart status:', e);
-        }
+        (async () => {
+            try {
+                const enabled = await invoke('get_autostart_enabled');
+                launchOnStartupToggle.checked = enabled;
+            } catch (e) {
+                console.error('Failed to get autostart status:', e);
+            }
+        })();
         launchOnStartupToggle.addEventListener('change', async () => {
             try {
                 await invoke('set_autostart_enabled', { enabled: launchOnStartupToggle.checked });
