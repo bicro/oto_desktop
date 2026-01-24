@@ -25,6 +25,7 @@ use tauri::http::Response;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder};
 use tauri::{command, AppHandle, Emitter, Manager};
+use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 // rusqlite is now used in db.rs module
 use futures_util::StreamExt;
@@ -279,6 +280,30 @@ fn load_transform_config() -> Result<TransformConfig, String> {
 #[tauri::command]
 fn quit_app() {
     std::process::exit(0);
+}
+
+#[tauri::command]
+fn get_autostart_enabled(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autostart_manager = app.autolaunch();
+    autostart_manager
+        .is_enabled()
+        .map_err(|e| format!("Failed to check autostart status: {}", e))
+}
+
+#[tauri::command]
+fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autostart_manager = app.autolaunch();
+    if enabled {
+        autostart_manager
+            .enable()
+            .map_err(|e| format!("Failed to enable autostart: {}", e))
+    } else {
+        autostart_manager
+            .disable()
+            .map_err(|e| format!("Failed to disable autostart: {}", e))
+    }
 }
 
 /// Maximum depth to search for model files in nested directories
@@ -2559,6 +2584,10 @@ fn main() {
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec![]),
+        ))
         .plugin(
             tauri_plugin_log::Builder::new()
                 .target(tauri_plugin_log::Target::new(
@@ -2652,6 +2681,8 @@ fn main() {
             load_transform_config,
             log_from_frontend,
             quit_app,
+            get_autostart_enabled,
+            set_autostart_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
