@@ -1844,6 +1844,10 @@
             }
         });
 
+        // Track clicks for double-click detection
+        let lastClickTime = 0;
+        let dragTimeout = null;
+
         document.body.addEventListener('mousedown', async (event) => {
             // Hide context menu on any click outside of it
             if (!event.target.closest('.context-menu')) {
@@ -1867,8 +1871,55 @@
             // AND not in transform edit mode
             if (!live2dOverlay.transformEditMode &&
                 (hitboxPoints.length < 3 || isPointInPolygon(event.clientX, event.clientY, hitboxPoints))) {
+                const now = Date.now();
+                const isDoubleClick = (now - lastClickTime) < 300;
+                lastClickTime = now;
+
+                // If this might be a double-click, delay dragging
+                if (isDoubleClick) {
+                    // Don't start dragging - let dblclick handler take over
+                    return;
+                }
+
+                // Delay drag start to allow double-click detection
                 const win = getCurrentWindow();
-                await win.startDragging();
+                dragTimeout = setTimeout(() => {
+                    win.startDragging();
+                }, 150);
+            }
+        });
+
+        // Cancel pending drag on mouseup (for quick clicks)
+        document.body.addEventListener('mouseup', () => {
+            if (dragTimeout) {
+                clearTimeout(dragTimeout);
+                dragTimeout = null;
+            }
+        });
+
+        // Double-click character to focus chat input
+        document.body.addEventListener('dblclick', (event) => {
+            // Cancel any pending drag
+            if (dragTimeout) {
+                clearTimeout(dragTimeout);
+                dragTimeout = null;
+            }
+
+            // Don't interfere with hitbox editing
+            if (hitboxEditMode) return;
+
+            // Don't interfere with UI elements
+            if (event.target.closest('.chat-panel')) return;
+            if (event.target.closest('.textbox-container')) return;
+            if (event.target.closest('.context-menu')) return;
+
+            // Only trigger if inside polygon (or no polygon defined)
+            if (hitboxPoints.length < 3 || isPointInPolygon(event.clientX, event.clientY, hitboxPoints)) {
+                // Transition to focused state (State 2)
+                AppState.shortcutState = 2;
+                document.body.classList.remove('input-hidden');
+                document.body.classList.add('hover-enabled');
+                chatInput.focus();
             }
         });
 
