@@ -40,11 +40,14 @@ use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
 
 // Windows-specific imports
 #[cfg(target_os = "windows")]
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    WM_NCACTIVATE, WM_NCPAINT, WM_NCCALCSIZE, WM_NCDESTROY,
 };
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 
 // Path helper functions are in paths.rs module
 
@@ -1568,22 +1571,65 @@ fn configure_overlay(window: &tauri::WebviewWindow) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
+const OVERLAY_SUBCLASS_ID: usize = 1;
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn overlay_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _uidsubclass: usize,
+    _dwrefdata: usize,
+) -> LRESULT {
+    match msg {
+        x if x == WM_NCACTIVATE => LRESULT(1),  // Prevent activation painting
+        x if x == WM_NCPAINT => LRESULT(0),      // Suppress NC painting
+        x if x == WM_NCCALCSIZE => {
+            if wparam.0 != 0 {
+                return LRESULT(0);  // Make entire window client area
+            }
+            DefSubclassProc(hwnd, msg, wparam, lparam)
+        }
+        x if x == WM_NCDESTROY => {
+            // Cleanup subclass on window destroy
+            let _ = RemoveWindowSubclass(hwnd, Some(overlay_subclass_proc), OVERLAY_SUBCLASS_ID);
+            DefSubclassProc(hwnd, msg, wparam, lparam)
+        }
+        _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn configure_overlay(window: &tauri::WebviewWindow) -> Result<(), String> {
     let hwnd = window
         .hwnd()
         .map_err(|e| format!("Failed to get HWND: {}", e))?;
+
     unsafe {
         SetWindowPos(
             HWND(hwnd.0),
             HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
+            0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         )
         .map_err(|e| format!("SetWindowPos failed: {}", e))?;
+
+        // Install subclass to prevent WebView2 title bar bug
+        let result = SetWindowSubclass(
+            HWND(hwnd.0),
+            Some(overlay_subclass_proc),
+            OVERLAY_SUBCLASS_ID,
+            0,
+        );
+
+        if !result.as_bool() {
+            warn!("Failed to install window subclass for overlay");
+        } else {
+            info!("Successfully installed overlay window subclass");
+        }
     }
+
     Ok(())
 }
 

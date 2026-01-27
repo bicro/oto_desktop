@@ -414,12 +414,14 @@
         }
 
         .history-message.user {
-            background: rgba(74, 158, 255, 0.2);
+            background: rgba(74, 158, 255, 0.15);
             color: #a8d4ff;
             margin-left: 20%;
+            border-radius: 12px 12px 4px 12px;
             word-wrap: break-word;
             overflow-wrap: break-word;
             white-space: pre-wrap;
+            border: 1px solid rgba(74, 158, 255, 0.25);
         }
 
         .history-message.assistant {
@@ -430,13 +432,61 @@
         }
 
         .history-message.character {
-            background: transparent;
-            color: #39c5bb;
-            font-style: italic;
-            padding: 0;
-            border-radius: 0;
+            background: rgba(57, 197, 187, 0.08);
+            color: #e0e0e0;
+            font-style: normal;
+            padding: 12px;
+            border-radius: 12px 12px 12px 4px;
             border-left: 3px solid #39c5bb;
-            padding-left: 12px;
+            margin-right: 20%;
+        }
+
+        /* RP Action styling */
+        .rp-action {
+            color: #fbbf24;
+            font-style: italic;
+            font-weight: 500;
+            opacity: 0.9;
+        }
+
+        /* Message headers for character name */
+        .message-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        .message-header-name {
+            font-weight: 600;
+        }
+
+        .message-header-name.character {
+            color: #39c5bb;
+        }
+
+        .message-avatar {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: rgba(57, 197, 187, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            color: #39c5bb;
+        }
+
+        /* Improved message bubbles */
+        .history-message + .history-message {
+            margin-top: 8px;
+        }
+
+        .history-message.user + .history-message.character,
+        .history-message.character + .history-message.user {
+            margin-top: 16px;
         }
 
         .history-message.focused,
@@ -908,7 +958,9 @@
             /** Whether RP model supports vision */
             rpSupportsVision: true,
             /** Shortcut toggle state: 0=hidden, 1=visible-unfocused, 2=visible-focused */
-            shortcutState: 0
+            shortcutState: 0,
+            /** Character name for RP chat */
+            characterName: localStorage.getItem('characterName') || 'Character'
         };
 
         // ============ Asset URL Resolution ============
@@ -2368,6 +2420,79 @@
             return html;
         }
 
+        // RP-specific markdown parser for character messages
+        function parseRPMarkdown(text) {
+            // Escape HTML
+            let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+            // Convert *actions* to styled spans BEFORE markdown processing
+            // Use placeholder to protect from italic conversion
+            const actions = [];
+            html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, (_, content) => {
+                actions.push(content);
+                return `__ACTION_${actions.length - 1}__`;
+            });
+
+            // Apply markdown (code blocks, inline code, bold)
+            html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+                const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
+                return `<div class="code-block">${langLabel}<pre><code>${code.trim()}</code></pre></div>`;
+            });
+            html = html.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+            html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+            // Restore actions with styling
+            html = html.replace(/__ACTION_(\d+)__/g, (_, i) =>
+                `<span class="rp-action">${actions[parseInt(i)]}</span>`);
+
+            // Line breaks
+            html = html.replace(/\n/g, '<br>');
+            return html;
+        }
+
+        // Create message element with optional header for character messages
+        function createMessageElement(role, content, contextLevel) {
+            const div = document.createElement('div');
+            div.className = `history-message ${role}`;
+            div.setAttribute('data-context-level', contextLevel);
+
+            if (role === 'character') {
+                // Get latest character name from localStorage (may have been updated in settings)
+                const characterName = localStorage.getItem('characterName') || 'Character';
+
+                // Header with avatar and name
+                const header = document.createElement('div');
+                header.className = 'message-header';
+
+                const avatar = document.createElement('span');
+                avatar.className = 'message-avatar';
+                avatar.textContent = characterName.charAt(0).toUpperCase();
+                header.appendChild(avatar);
+
+                const name = document.createElement('span');
+                name.className = 'message-header-name character';
+                name.textContent = characterName;
+                header.appendChild(name);
+
+                div.appendChild(header);
+            }
+
+            // Content
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+
+            if (role === 'character') {
+                contentDiv.innerHTML = parseRPMarkdown(content);
+            } else if (role === 'assistant') {
+                contentDiv.innerHTML = parseMarkdown(content);
+            } else {
+                contentDiv.textContent = content;
+            }
+
+            div.appendChild(contentDiv);
+            return div;
+        }
+
         // Tab to toggle screenshot, Escape to dismiss, Enter to submit
         chatInput.addEventListener('keydown', async (e) => {
             if (e.key === 'Tab') {
@@ -2453,10 +2578,7 @@
                 }
 
                 // Add user message to history immediately
-                const userDiv = document.createElement('div');
-                userDiv.className = 'history-message user';
-                userDiv.textContent = message;
-                userDiv.setAttribute('data-context-level', contextLevel);
+                const userDiv = createMessageElement('user', message, contextLevel);
                 historyContent.appendChild(userDiv);
 
                 // Track this user message for scroll limiting during streaming
@@ -2469,11 +2591,10 @@
                 const responseRole = contextLevel === 1 ? 'character' : 'assistant';
 
                 // Create streaming message div with thinking indicator
-                const streamDiv = document.createElement('div');
-                streamDiv.className = `history-message ${responseRole}`;
+                const streamDiv = createMessageElement(responseRole, '', contextLevel);
                 streamDiv.id = 'streaming-message';
-                streamDiv.setAttribute('data-context-level', contextLevel);
-                streamDiv.innerHTML = 'Thinking<span class="thinking-indicator"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
+                const streamContent = streamDiv.querySelector('.message-content');
+                streamContent.innerHTML = 'Thinking<span class="thinking-indicator"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
                 historyContent.appendChild(streamDiv);
 
                 // Track streaming content
@@ -2490,14 +2611,20 @@
                         assistantContent += chunk;
                         const el = document.getElementById('streaming-message');
                         if (el) {
-                            el.textContent = assistantContent;
+                            const contentEl = el.querySelector('.message-content');
+                            if (contentEl) {
+                                contentEl.innerHTML = parseRPMarkdown(assistantContent);
+                            }
                         }
                     } else if (role === 'assistant' && contextLevel === 0) {
                         // Assistant response (level 0)
                         assistantContent += chunk;
                         const el = document.getElementById('streaming-message');
                         if (el) {
-                            el.innerHTML = parseMarkdown(assistantContent);
+                            const contentEl = el.querySelector('.message-content');
+                            if (contentEl) {
+                                contentEl.innerHTML = parseMarkdown(assistantContent);
+                            }
                         }
                     }
                     scrollHistoryToBottom();
@@ -2514,8 +2641,11 @@
                     console.error('[Chat] Stream error:', event.payload);
                     const el = document.getElementById('streaming-message');
                     if (el) {
-                        el.textContent = 'Error: ' + event.payload.error;
-                        el.style.color = '#f87171';
+                        const contentEl = el.querySelector('.message-content');
+                        if (contentEl) {
+                            contentEl.textContent = 'Error: ' + event.payload.error;
+                            contentEl.style.color = '#f87171';
+                        }
                     }
                 });
 
@@ -2527,8 +2657,11 @@
                     console.error('[Chat] Error:', error);
                     const el = document.getElementById('streaming-message');
                     if (el) {
-                        el.textContent = 'Error: ' + error;
-                        el.style.color = '#f87171';
+                        const contentEl = el.querySelector('.message-content');
+                        if (contentEl) {
+                            contentEl.textContent = 'Error: ' + error;
+                            contentEl.style.color = '#f87171';
+                        }
                     }
                 } finally {
                     // Clean up listeners
@@ -2601,19 +2734,7 @@
                 }
 
                 history.forEach(msg => {
-                    const div = document.createElement('div');
-                    div.className = `history-message ${msg.role}`;
-
-                    // Store context level for filtering
-                    div.setAttribute('data-context-level', msg.context_level || 0);
-
-                    // Use markdown parsing for assistant messages, plain text for user/character
-                    if (msg.role === 'assistant') {
-                        div.innerHTML = parseMarkdown(msg.content);
-                    } else {
-                        div.textContent = msg.content;
-                    }
-
+                    const div = createMessageElement(msg.role, msg.content, msg.context_level || 0);
                     historyContent.appendChild(div);
                 });
 
@@ -2724,6 +2845,16 @@
                 updateScreenshotVisual();
                 updateStatus("Model doesn't support images - screenshot disabled", 'listening');
                 setTimeout(() => updateStatus('', ''), 2000);
+            }
+        });
+
+        // Listen for prompts saved to refresh chat history with new character name
+        listen('prompts-saved', async (event) => {
+            console.log('[Overlay] Prompts saved, refreshing chat history');
+            const isHistoryOpen = historyModal.classList.contains('visible');
+            if (isHistoryOpen) {
+                await loadChatHistory();
+                applyHistoryFilter();
             }
         });
 

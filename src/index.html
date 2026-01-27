@@ -1713,11 +1713,16 @@
         </div>
         <div class="section-content">
             <div class="form-group">
+                <div class="form-label" style="color: #39c5bb;">Character Name</div>
+                <input type="text" id="characterNameInput" placeholder="Enter character name..." style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text); font-size: 14px;">
+                <div class="form-hint">Name displayed in chat messages</div>
+            </div>
+            <div class="form-group" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
                 <div class="form-label">System Prompt</div>
                 <textarea id="systemPromptInput" placeholder="Customize AI behavior..."></textarea>
                 <div class="form-hint">Main AI assistant personality (Level 0)</div>
             </div>
-            <div class="form-group" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+            <div class="form-group">
                 <div class="form-label" style="color: #39c5bb;">Character - Inner Monologue Prompt</div>
                 <textarea id="characterPromptInput" placeholder="Leave empty for default character commentary style..."></textarea>
                 <div class="form-hint">Character's reflections ON AI responses (Level 0 commentary)</div>
@@ -1887,6 +1892,7 @@
         const systemPromptInput = document.getElementById('systemPromptInput');
         const characterPromptInput = document.getElementById('characterPromptInput');
         const dialoguePromptInput = document.getElementById('dialoguePromptInput');
+        const characterNameInput = document.getElementById('characterNameInput');
         const savePromptsBtn = document.getElementById('savePromptsBtn');
         const promptsSaved = document.getElementById('promptsSaved');
         const historyBtn = document.getElementById('historyBtn');
@@ -2140,6 +2146,12 @@
 
         // Load prompts
         async function loadPrompts() {
+            // Load character name from localStorage
+            const savedName = localStorage.getItem('characterName');
+            if (savedName) {
+                characterNameInput.value = savedName;
+            }
+
             try {
                 const systemPrompt = await invoke('get_system_prompt');
                 systemPromptInput.value = systemPrompt;
@@ -2165,9 +2177,21 @@
         // Save prompts
         savePromptsBtn.addEventListener('click', async () => {
             try {
+                // Save character name to localStorage
+                const charName = characterNameInput.value.trim();
+                if (charName) {
+                    localStorage.setItem('characterName', charName);
+                } else {
+                    localStorage.removeItem('characterName');
+                }
+
                 await invoke('save_system_prompt', { prompt: systemPromptInput.value.trim() });
                 await invoke('save_character_prompt', { prompt: characterPromptInput.value.trim() });
                 await invoke('save_dialogue_prompt', { prompt: dialoguePromptInput.value.trim() });
+
+                // Notify overlay to refresh chat history with new character name
+                await emit('prompts-saved', { characterName: charName || 'Character' });
+
                 promptsSaved.style.display = 'inline';
                 showToast('Prompts saved', 'success');
                 setTimeout(() => { promptsSaved.style.display = 'none'; }, 2000);
