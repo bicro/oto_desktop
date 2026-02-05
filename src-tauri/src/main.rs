@@ -1377,6 +1377,10 @@ async fn send_chat_message(
     include_screenshot: bool,
     context_level: u8,
 ) -> Result<ChatResponse, String> {
+    if context_level != 2 {
+        return Err("Only Codex chat (level 2) is enabled in this build".to_string());
+    }
+
     // Get API key
     let api_key = get_api_key()
         .await?
@@ -1552,6 +1556,10 @@ async fn send_chat_message_stream(
     include_screenshot: bool,
     context_level: u8,
 ) -> Result<(), String> {
+    if context_level != 2 {
+        return Err("Only Codex chat (level 2) is enabled in this build".to_string());
+    }
+
     // Get API key
     let api_key = get_api_key()
         .await?

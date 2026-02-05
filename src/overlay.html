@@ -898,9 +898,7 @@
         <div class="chat-history" id="historyModal">
             <div class="history-header">
                 <div class="chat-tabs">
-                    <button class="chat-tab tab-assistant active" data-level="0">Assistant</button>
-                    <button class="chat-tab tab-character" data-level="1">Character</button>
-                    <button class="chat-tab tab-codex" data-level="2">Codex</button>
+                    <button class="chat-tab tab-codex active" data-level="2">Codex</button>
                 </div>
                 <button id="closeHistoryBtn">&#x2715;</button>
             </div>
@@ -1001,7 +999,7 @@
         // ============ Constants ============
         const MIN_ASSISTANT_TEXT_LENGTH = 80; // Minimum chars for navigable assistant blocks
         const DOUBLE_TAP_THRESHOLD_MS = 500; // Double-tap detection window
-        const LEVEL_LABELS = ['Assistant', 'Character', 'Codex'];
+        const LEVEL_LABELS = ['Codex'];
 
         // ============ Application State ============
         /**
@@ -1009,8 +1007,8 @@
          * @type {Object}
          */
         const AppState = {
-            /** Active context level (0=Assistant, 1=Character, 2=Codex) */
-            activeContextLevel: 0,
+            /** Active context level (2=Codex) */
+            activeContextLevel: 2,
             /** Current focused element index in history (-1 = none) */
             historyFocusIndex: -1,
             /** Whether to include screenshot with messages */
@@ -2248,36 +2246,8 @@
          * @param {'left'|'right'} direction - Direction to change level
          */
         function changeHistoryLevel(direction) {
-            let newLevel;
-            const maxLevel = LEVEL_LABELS.length - 1;
-            if (direction === 'right' && AppState.activeContextLevel < maxLevel) {
-                newLevel = AppState.activeContextLevel + 1;
-            } else if (direction === 'left' && AppState.activeContextLevel > 0) {
-                newLevel = AppState.activeContextLevel - 1;
-            } else {
-                return;
-            }
-
-            // Check if new model supports vision
-            const newSupportsVision = newLevel === 0
-                ? AppState.assistantSupportsVision
-                : AppState.rpSupportsVision;
-
-            // If screenshot is enabled but new model doesn't support vision, disable it
-            if (AppState.includeScreenshot && !newSupportsVision) {
-                AppState.includeScreenshot = false;
-                localStorage.setItem('screenshotEnabled', 'false');
-                updateStatus("Model doesn't support images - screenshot disabled", 'listening');
-                setTimeout(() => updateStatus('', ''), 2000);
-            }
-
-            AppState.activeContextLevel = newLevel;
-            AppState.historyFocusIndex = -1;
-            loadChatHistory().then(() => {
-                applyHistoryFilter();
-                chatInput.focus();
-                updateScreenshotVisual();
-            });
+            // Codex-only mode: level switching is intentionally disabled.
+            return;
         }
 
         /**
@@ -2287,21 +2257,19 @@
          * @returns {boolean} True if message should be hidden
          */
         function shouldFilterMessage(role, msgContextLevel) {
-            const activeLevel = AppState.activeContextLevel;
-
             // User messages: show if their context level matches active
             if (role === 'user') {
-                return msgContextLevel !== activeLevel;
+                return msgContextLevel !== 2;
             }
 
             // Assistant messages: show if their context level matches active
             if (role === 'assistant') {
-                return msgContextLevel !== activeLevel;
+                return msgContextLevel !== 2;
             }
 
             // Character messages: only show if Character tab (level 1) is active
             if (role === 'character') {
-                return activeLevel !== 1;
+                return true;
             }
 
             return false;
@@ -2680,9 +2648,11 @@
                 // Check if trying to enable screenshot
                 if (!AppState.includeScreenshot) {
                     // Check if current model supports vision
-                    const currentSupportsVision = AppState.activeContextLevel === 0
-                        ? AppState.assistantSupportsVision
-                        : AppState.rpSupportsVision;
+                    const currentSupportsVision = AppState.activeContextLevel === 2
+                        ? true
+                        : (AppState.activeContextLevel === 0
+                            ? AppState.assistantSupportsVision
+                            : AppState.rpSupportsVision);
 
                     if (!currentSupportsVision) {
                         updateStatus("Model doesn't support images", 'listening');
@@ -2968,7 +2938,7 @@
             document.getElementById('historyBtn').classList.add('active');
             await loadChatHistory();
             updateLevelIndicator();
-            applyHistoryFilter(); // Apply filter based on current level (0 on re-open)
+            applyHistoryFilter(); // Apply Codex-only history filter
             // Scroll to bottom after everything is loaded (force since opening modal)
             scrollHistoryToBottom(true);
             chatInput.focus();
@@ -3078,7 +3048,9 @@
                 console.log('[Overlay] Vision capability initialized - Assistant:', assistantVision, 'RP:', rpVision);
 
                 // Check if current model doesn't support vision and screenshot is enabled
-                const currentSupportsVision = AppState.activeContextLevel === 0 ? assistantVision : rpVision;
+                const currentSupportsVision = AppState.activeContextLevel === 2
+                    ? true
+                    : (AppState.activeContextLevel === 0 ? assistantVision : rpVision);
                 if (AppState.includeScreenshot && !currentSupportsVision) {
                     AppState.includeScreenshot = false;
                     localStorage.setItem('screenshotEnabled', 'false');
