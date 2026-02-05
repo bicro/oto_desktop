@@ -999,6 +999,7 @@
         // ============ Constants ============
         const MIN_ASSISTANT_TEXT_LENGTH = 80; // Minimum chars for navigable assistant blocks
         const DOUBLE_TAP_THRESHOLD_MS = 500; // Double-tap detection window
+        const SHORTCUT_HOLD_TO_TALK_THRESHOLD_MS = 200;
         const LEVEL_LABELS = ['Codex'];
 
         // ============ Application State ============
@@ -2057,8 +2058,15 @@
         let mediaRecorder = null;
         let audioChunks = [];
         let isRecording = false;
+        let shortcutPressStartTs = 0;
+        let shortcutHoldTimer = null;
+        let shortcutHoldActive = false;
+        let recordingStartedByShortcut = false;
+        let shortcutEligiblePress = false;
+        let suppressNextShortcutCycle = false;
 
         async function startRecording() {
+            if (isRecording) return;
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
@@ -2389,19 +2397,7 @@
             chatInput.blur();
         }
 
-        // State 0 → State 1: Character just shown
-        listen('shortcut-show-character', () => {
-            AppState.shortcutState = 1;
-            closeTextbox();
-            // Enable hover after delay - prevents flicker if mouse already hovering
-            setTimeout(() => {
-                document.body.classList.remove('input-hidden');
-                document.body.classList.add('hover-enabled');
-            }, 200);
-        });
-
-        // State 1 → State 2 OR State 2 → State 0
-        listen('shortcut-cycle-state', () => {
+        function runShortcutCycleState() {
             const isFocused = document.activeElement === chatInput;
 
             if (!isFocused) {
@@ -2416,6 +2412,89 @@
                 closeTextbox();
                 invoke('hide_overlay');
             }
+        }
+
+        function shouldUseShortcutPushToTalk() {
+            return AppState.shortcutState !== 0
+                && AppState.activeContextLevel === 2
+                && document.activeElement === chatInput;
+        }
+
+        function resetShortcutHoldState() {
+            if (shortcutHoldTimer) {
+                clearTimeout(shortcutHoldTimer);
+                shortcutHoldTimer = null;
+            }
+            shortcutPressStartTs = 0;
+            shortcutHoldActive = false;
+            recordingStartedByShortcut = false;
+            shortcutEligiblePress = false;
+            suppressNextShortcutCycle = false;
+        }
+
+        // State 0 → State 1: Character just shown
+        listen('shortcut-show-character', () => {
+            AppState.shortcutState = 1;
+            closeTextbox();
+            // Enable hover after delay - prevents flicker if mouse already hovering
+            setTimeout(() => {
+                document.body.classList.remove('input-hidden');
+                document.body.classList.add('hover-enabled');
+            }, 200);
+        });
+
+        // State 1 → State 2 OR State 2 → State 0
+        listen('shortcut-cycle-state', () => {
+            if (suppressNextShortcutCycle) {
+                return;
+            }
+            runShortcutCycleState();
+        });
+
+        listen('shortcut-alt-space-pressed', () => {
+            if (!shouldUseShortcutPushToTalk()) {
+                suppressNextShortcutCycle = false;
+                shortcutEligiblePress = false;
+                return;
+            }
+
+            suppressNextShortcutCycle = true;
+            shortcutEligiblePress = true;
+            shortcutPressStartTs = Date.now();
+
+            if (shortcutHoldTimer) clearTimeout(shortcutHoldTimer);
+            shortcutHoldTimer = setTimeout(async () => {
+                if (!shortcutEligiblePress) return;
+                if (!shouldUseShortcutPushToTalk()) return;
+
+                shortcutHoldActive = true;
+                recordingStartedByShortcut = true;
+                await startRecording();
+            }, SHORTCUT_HOLD_TO_TALK_THRESHOLD_MS);
+        });
+
+        listen('shortcut-alt-space-released', () => {
+            if (!shortcutEligiblePress) {
+                resetShortcutHoldState();
+                return;
+            }
+
+            if (shortcutHoldTimer) {
+                clearTimeout(shortcutHoldTimer);
+                shortcutHoldTimer = null;
+            }
+
+            if (shortcutHoldActive) {
+                if (recordingStartedByShortcut && isRecording) {
+                    stopRecording();
+                }
+                resetShortcutHoldState();
+                return;
+            }
+
+            // Focused quick tap: preserve existing toggle behavior.
+            runShortcutCycleState();
+            resetShortcutHoldState();
         });
 
         // Sync state on external visibility changes (e.g., tray menu)
@@ -2424,6 +2503,10 @@
                 AppState.shortcutState = 0;
                 document.body.classList.add('input-hidden');
                 document.body.classList.remove('hover-enabled');  // Disable hover when hiding
+                if (recordingStartedByShortcut && isRecording) {
+                    stopRecording();
+                }
+                resetShortcutHoldState();
             } else if (AppState.shortcutState === 0) {
                 AppState.shortcutState = 1;
                 setTimeout(() => {

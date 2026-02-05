@@ -3057,26 +3057,36 @@ fn main() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    if event.state() == ShortcutState::Pressed
-                        && (shortcut.matches(Modifiers::ALT, Code::Space)
-                            || shortcut.matches(Modifiers::SUPER, Code::Space))
-                    {
-                        let is_visible = {
-                            let state = app.state::<AppState>();
-                            let visible = *state.overlay_visible.lock().unwrap();
-                            visible
-                        };
+                    let is_alt_space_shortcut = shortcut.matches(Modifiers::ALT, Code::Space)
+                        || shortcut.matches(Modifiers::SUPER, Code::Space);
+                    if !is_alt_space_shortcut {
+                        return;
+                    }
 
-                        if !is_visible {
-                            // State 0 → State 1: Show character only
-                            toggle_overlay_sync(app);
-                            let _ = app.emit("shortcut-show-character", ());
-                        } else {
-                            // State 1 or 2: Let frontend cycle
-                            if let Some(window) = app.get_webview_window("overlay") {
-                                let _ = window.set_focus();
+                    match event.state() {
+                        ShortcutState::Pressed => {
+                            let is_visible = {
+                                let state = app.state::<AppState>();
+                                let visible = *state.overlay_visible.lock().unwrap();
+                                visible
+                            };
+
+                            if !is_visible {
+                                // State 0 → State 1: Show character only
+                                toggle_overlay_sync(app);
+                                let _ = app.emit("shortcut-show-character", ());
+                            } else {
+                                // Allow frontend to choose cycle vs hold-to-talk
+                                let _ = app.emit("shortcut-alt-space-pressed", ());
+                                // Keep existing cycle event for non-focused behavior.
+                                if let Some(window) = app.get_webview_window("overlay") {
+                                    let _ = window.set_focus();
+                                }
+                                let _ = app.emit("shortcut-cycle-state", ());
                             }
-                            let _ = app.emit("shortcut-cycle-state", ());
+                        }
+                        ShortcutState::Released => {
+                            let _ = app.emit("shortcut-alt-space-released", ());
                         }
                     }
                 })
