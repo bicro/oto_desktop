@@ -17,7 +17,7 @@ use rdev::{listen, Event, EventType};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::{Read, Write as IoWrite};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 #[cfg(target_os = "windows")]
@@ -1160,6 +1160,148 @@ async fn call_openrouter_chat(
         .map_err(|e| format!("API request failed: {}", e))
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CodexGeneratedFile {
+    path: String,
+    content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CodexGenerationResponse {
+    summary: String,
+    files: Vec<CodexGeneratedFile>,
+    output: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CodexUiResult {
+    summary: String,
+    workspace_dir: String,
+    files_touched: Vec<String>,
+    output: String,
+}
+
+fn validate_codex_relative_path(path: &str) -> Result<PathBuf, String> {
+    let input = Path::new(path);
+    if input.is_absolute() {
+        return Err(format!("Absolute paths are not allowed: {}", path));
+    }
+
+    let mut cleaned = PathBuf::new();
+    for component in input.components() {
+        match component {
+            Component::Normal(part) => cleaned.push(part),
+            Component::CurDir => {}
+            _ => return Err(format!("Invalid path component in {}", path)),
+        }
+    }
+
+    if cleaned.as_os_str().is_empty() {
+        return Err("Empty file path returned by model".to_string());
+    }
+
+    Ok(cleaned)
+}
+
+fn extract_json_object(raw: &str) -> Option<String> {
+    let start = raw.find('{')?;
+    let end = raw.rfind('}')?;
+    if start >= end {
+        return None;
+    }
+    Some(raw[start..=end].to_string())
+}
+
+fn format_codex_content(result: &CodexUiResult) -> String {
+    let json = serde_json::to_string_pretty(result).unwrap_or_else(|_| "{}".to_string());
+    format!("```codex-result\n{}\n```", json)
+}
+
+fn emit_stream_chunk(app: &AppHandle, text: &str, context_level: u8) {
+    let _ = app.emit(
+        "chat-stream-chunk",
+        json!({
+            "chunk": text,
+            "role": "assistant",
+            "context_level": context_level
+        }),
+    );
+}
+
+fn apply_codex_files(workspace_dir: &Path, files: &[CodexGeneratedFile]) -> Result<Vec<String>, String> {
+    let mut touched_files = Vec::new();
+
+    for file in files {
+        let safe_relative_path = validate_codex_relative_path(&file.path)?;
+        let full_path = workspace_dir.join(&safe_relative_path);
+
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create directory {:?}: {}", parent, e))?;
+        }
+
+        std::fs::write(&full_path, &file.content)
+            .map_err(|e| format!("Failed to write file {:?}: {}", full_path, e))?;
+
+        touched_files.push(safe_relative_path.to_string_lossy().to_string());
+    }
+
+    Ok(touched_files)
+}
+
+async fn generate_codex_workspace_result(
+    api_key: &str,
+    user_message: &str,
+    workspace_dir: &Path,
+) -> Result<CodexGenerationResponse, String> {
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .header("HTTP-Referer", "https://oto.desktop")
+        .header("X-Title", "Oto Desktop Codex Mode")
+        .json(&json!({
+            "model": "openai/gpt-5.2-codex",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": format!("{}\n\nWorkspace path: {}", DEFAULT_CODEX_PROMPT, workspace_dir.to_string_lossy())
+                },
+                {
+                    "role": "user",
+                    "content": user_message
+                }
+            ],
+            "temperature": 0.2
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Codex request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.unwrap_or_default();
+        return Err(format!("Codex API error: {}", error_text));
+    }
+
+    let response_json: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Codex API response: {}", e))?;
+
+    let content = response_json["choices"][0]["message"]["content"]
+        .as_str()
+        .ok_or_else(|| "Codex API returned empty content".to_string())?;
+
+    serde_json::from_str::<CodexGenerationResponse>(content)
+        .or_else(|_| {
+            let maybe_json = extract_json_object(content)
+                .ok_or_else(|| "Codex response did not contain valid JSON".to_string())?;
+            serde_json::from_str::<CodexGenerationResponse>(&maybe_json)
+                .map_err(|e| format!("Failed to parse Codex JSON: {}", e))
+        })
+}
+
 #[command]
 async fn send_chat_message(
     app: AppHandle,
@@ -1167,6 +1309,50 @@ async fn send_chat_message(
     include_screenshot: bool,
     context_level: u8,
 ) -> Result<ChatResponse, String> {
+    // Get API key
+    let api_key = get_api_key()
+        .await?
+        .ok_or_else(|| "API key not configured".to_string())?;
+
+    if context_level == 2 {
+        let workspace_root = get_codex_workspace_dir()?;
+        std::fs::create_dir_all(&workspace_root)
+            .map_err(|e| format!("Failed to create Codex workspace root: {}", e))?;
+
+        let session_name = format!("session-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+        let workspace_dir = workspace_root.join(session_name);
+        std::fs::create_dir_all(&workspace_dir)
+            .map_err(|e| format!("Failed to create Codex workspace session: {}", e))?;
+
+        let codex_result = generate_codex_workspace_result(&api_key, &message, &workspace_dir).await?;
+        let touched_files = apply_codex_files(&workspace_dir, &codex_result.files)?;
+
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        store_chat_message(&timestamp, "user", &message, context_level)?;
+
+        let ui_result = CodexUiResult {
+            summary: codex_result.summary,
+            workspace_dir: workspace_dir.to_string_lossy().to_string(),
+            files_touched: touched_files,
+            output: codex_result.output,
+        };
+        let content = format_codex_content(&ui_result);
+        store_chat_message(&timestamp, "assistant", &content, context_level)?;
+
+        let _ = app.emit(
+            "chat-stream-done",
+            json!({
+                "role": "assistant",
+                "context_level": context_level,
+                "full_content": content.clone()
+            }),
+        );
+
+        return Ok(ChatResponse {
+            main_response: content,
+            character_comments: None,
+        });
+    }
     // Get system prompt based on level
     let system_prompt = match context_level {
         1 => {
@@ -1298,6 +1484,65 @@ async fn send_chat_message_stream(
     include_screenshot: bool,
     context_level: u8,
 ) -> Result<(), String> {
+    // Get API key
+    let api_key = get_api_key()
+        .await?
+        .ok_or_else(|| "API key not configured".to_string())?;
+
+    if context_level == 2 {
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        store_chat_message(&timestamp, "user", &message, context_level)?;
+
+        emit_stream_chunk(&app, "Planning implementation...\n", context_level);
+
+        let workspace_root = get_codex_workspace_dir()?;
+        std::fs::create_dir_all(&workspace_root)
+            .map_err(|e| format!("Failed to create Codex workspace root: {}", e))?;
+
+        let session_name = format!("session-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+        let workspace_dir = workspace_root.join(session_name);
+        std::fs::create_dir_all(&workspace_dir)
+            .map_err(|e| format!("Failed to create Codex workspace session: {}", e))?;
+
+        emit_stream_chunk(
+            &app,
+            &format!("Workspace: {}\n", workspace_dir.to_string_lossy()),
+            context_level,
+        );
+        emit_stream_chunk(&app, "Generating code with Codex...\n", context_level);
+
+        let codex_result = generate_codex_workspace_result(&api_key, &message, &workspace_dir).await?;
+
+        emit_stream_chunk(&app, "Writing files...\n", context_level);
+        let touched_files = apply_codex_files(&workspace_dir, &codex_result.files)?;
+        if touched_files.is_empty() {
+            emit_stream_chunk(&app, "No files were created.\n", context_level);
+        } else {
+            for file in &touched_files {
+                emit_stream_chunk(&app, &format!("Created: {}\n", file), context_level);
+            }
+        }
+
+        let ui_result = CodexUiResult {
+            summary: codex_result.summary,
+            workspace_dir: workspace_dir.to_string_lossy().to_string(),
+            files_touched: touched_files,
+            output: codex_result.output,
+        };
+        let full_content = format_codex_content(&ui_result);
+        store_chat_message(&timestamp, "assistant", &full_content, context_level)?;
+
+        let _ = app.emit(
+            "chat-stream-done",
+            json!({
+                "role": "assistant",
+                "context_level": context_level,
+                "full_content": full_content.clone()
+            }),
+        );
+
+        return Ok(());
+    }
     // Get system prompt based on level
     let system_prompt = match context_level {
         1 => get_dialogue_prompt().await?,
@@ -2429,6 +2674,126 @@ async fn open_overlay_devtools(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
+#[command]
+async fn open_codex_output(workspace_dir: String) -> Result<(), String> {
+    let workspace_root = get_codex_workspace_dir()?;
+    std::fs::create_dir_all(&workspace_root)
+        .map_err(|e| format!("Failed to create Codex workspace root: {}", e))?;
+
+    let requested = PathBuf::from(workspace_dir);
+    let target_dir = if requested.is_absolute() {
+        requested
+    } else {
+        workspace_root.join(requested)
+    };
+
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|e| format!("Failed to create output directory: {}", e))?;
+
+    let canonical_root = std::fs::canonicalize(&workspace_root)
+        .map_err(|e| format!("Failed to resolve workspace root: {}", e))?;
+    let canonical_target = std::fs::canonicalize(&target_dir)
+        .map_err(|e| format!("Failed to resolve output directory: {}", e))?;
+
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err("Output path is outside Codex workspace".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&canonical_target)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&canonical_target)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&canonical_target)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    Ok(())
+}
+
+#[command]
+async fn open_codex_website(workspace_dir: String, file_path: String) -> Result<(), String> {
+    let workspace_root = get_codex_workspace_dir()?;
+    std::fs::create_dir_all(&workspace_root)
+        .map_err(|e| format!("Failed to create Codex workspace root: {}", e))?;
+
+    let requested_workspace = PathBuf::from(workspace_dir);
+    let workspace_dir = if requested_workspace.is_absolute() {
+        requested_workspace
+    } else {
+        workspace_root.join(requested_workspace)
+    };
+
+    std::fs::create_dir_all(&workspace_dir)
+        .map_err(|e| format!("Failed to create workspace directory: {}", e))?;
+
+    let safe_relative_path = validate_codex_relative_path(&file_path)?;
+    let target_file = workspace_dir.join(&safe_relative_path);
+    let extension = target_file
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if extension != "html" && extension != "htm" {
+        return Err("Only HTML files can be opened as website output".to_string());
+    }
+
+    if !target_file.exists() {
+        return Err("Website file does not exist".to_string());
+    }
+
+    let canonical_root = std::fs::canonicalize(&workspace_root)
+        .map_err(|e| format!("Failed to resolve workspace root: {}", e))?;
+    let canonical_target = std::fs::canonicalize(&target_file)
+        .map_err(|e| format!("Failed to resolve website file: {}", e))?;
+
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err("Website path is outside Codex workspace".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&canonical_target)
+            .spawn()
+            .map_err(|e| format!("Failed to open website: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&canonical_target)
+            .spawn()
+            .map_err(|e| format!("Failed to open website: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&canonical_target)
+            .spawn()
+            .map_err(|e| format!("Failed to open website: {}", e))?;
+    }
+
+    Ok(())
+}
+
 // ============ Main ============
 
 fn main() {
@@ -2667,6 +3032,8 @@ fn main() {
             take_screenshot,
             open_screenshots_folder,
             open_logs_folder,
+            open_codex_output,
+            open_codex_website,
             save_api_key,
             get_api_key,
             has_api_key,

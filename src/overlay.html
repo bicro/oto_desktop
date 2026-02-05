@@ -439,6 +439,101 @@
             padding-left: 12px;
         }
 
+        .history-message.assistant.codex {
+            background: rgba(255, 184, 77, 0.12);
+            border: 1px solid rgba(255, 184, 77, 0.2);
+            margin-right: 10%;
+        }
+
+        .codex-card {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .codex-title {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+            color: #ffd08a;
+            text-transform: uppercase;
+        }
+
+        .codex-section-title {
+            margin: 0 0 4px 0;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            color: rgba(255, 255, 255, 0.8);
+            text-transform: uppercase;
+        }
+
+        .codex-summary {
+            color: #fff8ed;
+            line-height: 1.5;
+        }
+
+        .codex-path {
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+            font-size: 12px;
+            color: #ffdca8;
+            word-break: break-all;
+        }
+
+        .codex-files {
+            margin: 0;
+            padding-left: 18px;
+        }
+
+        .codex-files li {
+            margin: 4px 0;
+            color: #ffefdc;
+            font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+            font-size: 12px;
+            word-break: break-word;
+        }
+
+        .codex-output {
+            margin: 0;
+            padding: 10px;
+            border-radius: 6px;
+            background: rgba(0, 0, 0, 0.32);
+            color: #ffeacd;
+            white-space: pre-wrap;
+            font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .codex-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .codex-open-btn {
+            border: 1px solid rgba(255, 210, 143, 0.4);
+            background: rgba(255, 184, 77, 0.12);
+            color: #ffdca8;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .codex-open-btn:hover {
+            background: rgba(255, 184, 77, 0.2);
+            border-color: rgba(255, 210, 143, 0.6);
+            color: #fff0d7;
+        }
+
         .history-message.focused,
         .history-message p.focused,
         .history-message h2.focused,
@@ -695,6 +790,11 @@
             color: #39c5bb;
         }
 
+        .chat-tab.tab-codex.active {
+            background: rgba(255, 184, 77, 0.2);
+            color: #ffcb7a;
+        }
+
 
         /* Context menu */
         .context-menu {
@@ -790,6 +890,7 @@
                 <div class="chat-tabs">
                     <button class="chat-tab tab-assistant active" data-level="0">Assistant</button>
                     <button class="chat-tab tab-character" data-level="1">Character</button>
+                    <button class="chat-tab tab-codex" data-level="2">Codex</button>
                 </div>
                 <button id="closeHistoryBtn">&#x2715;</button>
             </div>
@@ -885,7 +986,7 @@
         // ============ Constants ============
         const MIN_ASSISTANT_TEXT_LENGTH = 80; // Minimum chars for navigable assistant blocks
         const DOUBLE_TAP_THRESHOLD_MS = 500; // Double-tap detection window
-        const LEVEL_LABELS = ['Assistant', 'Character'];
+        const LEVEL_LABELS = ['Assistant', 'Character', 'Codex'];
 
         // ============ Application State ============
         /**
@@ -893,7 +994,7 @@
          * @type {Object}
          */
         const AppState = {
-            /** Active context level (0=Assistant, 1=Character) */
+            /** Active context level (0=Assistant, 1=Character, 2=Codex) */
             activeContextLevel: 0,
             /** Current focused element index in history (-1 = none) */
             historyFocusIndex: -1,
@@ -1973,6 +2074,10 @@
                 }
 
                 if (msg.classList.contains('assistant')) {
+                    if (msg.classList.contains('codex')) {
+                        elements.push(msg);
+                        return;
+                    }
                     // Add block-level children, skip short one-liners
                     msg.querySelectorAll('p, h2, h3, h4, pre, ul, ol').forEach(el => {
                         if (el.textContent.trim().length >= MIN_ASSISTANT_TEXT_LENGTH) {
@@ -2026,14 +2131,14 @@
          * @param {'left'|'right'} direction - Direction to change level
          */
         function changeHistoryLevel(direction) {
-            // Switch between tabs: 0 (Assistant) <-> 1 (Character)
             let newLevel;
-            if (direction === 'right' && AppState.activeContextLevel === 0) {
-                newLevel = 1;
-            } else if (direction === 'left' && AppState.activeContextLevel === 1) {
-                newLevel = 0;
+            const maxLevel = LEVEL_LABELS.length - 1;
+            if (direction === 'right' && AppState.activeContextLevel < maxLevel) {
+                newLevel = AppState.activeContextLevel + 1;
+            } else if (direction === 'left' && AppState.activeContextLevel > 0) {
+                newLevel = AppState.activeContextLevel - 1;
             } else {
-                return; // Already at the edge
+                return;
             }
 
             // Check if new model supports vision
@@ -2072,9 +2177,9 @@
                 return msgContextLevel !== activeLevel;
             }
 
-            // Assistant messages: show if level 0 is active
+            // Assistant messages: show if their context level matches active
             if (role === 'assistant') {
-                return activeLevel !== 0;
+                return msgContextLevel !== activeLevel;
             }
 
             // Character messages: only show if Character tab (level 1) is active
@@ -2174,6 +2279,7 @@
                 const level = parseInt(tab.getAttribute('data-level'), 10);
                 tab.classList.toggle('active', AppState.activeContextLevel === level);
             });
+            chatPanel.classList.toggle('level-2', AppState.activeContextLevel === 2);
         }
 
         /**
@@ -2241,6 +2347,87 @@
                 }, 200);
             }
         });
+
+        function escapeHtml(text) {
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function parseCodexResult(content) {
+            const match = content.trim().match(/^```codex-result\s+([\s\S]*?)\s+```$/);
+            if (!match) {
+                return null;
+            }
+
+            try {
+                const parsed = JSON.parse(match[1]);
+                if (!parsed || typeof parsed !== 'object') {
+                    return null;
+                }
+                return {
+                    summary: parsed.summary || 'No summary provided.',
+                    workspace_dir: parsed.workspace_dir || '',
+                    files_touched: Array.isArray(parsed.files_touched) ? parsed.files_touched : [],
+                    output: parsed.output || ''
+                };
+            } catch {
+                return null;
+            }
+        }
+
+        function renderCodexResult(content) {
+            const result = parseCodexResult(content);
+            if (!result) {
+                return null;
+            }
+
+            const websiteFile = result.files_touched.find(file => /\.(html?|HTML?)$/.test(file));
+
+            const filesHtml = result.files_touched.length > 0
+                ? result.files_touched.map(file => `<li>${escapeHtml(file)}</li>`).join('')
+                : '<li>No files created</li>';
+
+            return `
+                <div class="codex-card">
+                    <div class="codex-title">Codex Run</div>
+                    <div>
+                        <div class="codex-section-title">Summary</div>
+                        <div class="codex-summary">${escapeHtml(result.summary)}</div>
+                    </div>
+                    <div>
+                        <div class="codex-section-title">Workspace</div>
+                        <div class="codex-path">${escapeHtml(result.workspace_dir)}</div>
+                    </div>
+                    <div>
+                        <div class="codex-section-title">Files Touched</div>
+                        <ul class="codex-files">${filesHtml}</ul>
+                    </div>
+                    <div>
+                        <div class="codex-section-title">Output</div>
+                        <pre class="codex-output">${escapeHtml(result.output)}</pre>
+                    </div>
+                    <div class="codex-actions">
+                        ${websiteFile ? `<button class="codex-open-btn" data-workspace="${escapeHtml(result.workspace_dir)}" data-website="${escapeHtml(websiteFile)}">Open Website</button>` : ''}
+                        <button class="codex-open-btn" data-workspace="${escapeHtml(result.workspace_dir)}">Open Output</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderAssistantMessage(div, content, contextLevel) {
+            const codexCard = contextLevel === 2 ? renderCodexResult(content) : null;
+            if (codexCard) {
+                div.classList.add('codex');
+                div.innerHTML = codexCard;
+            } else {
+                div.classList.remove('codex');
+                div.innerHTML = parseMarkdown(content);
+            }
+        }
 
         // Enhanced Markdown parser function
         function parseMarkdown(text) {
@@ -2492,12 +2679,16 @@
                         if (el) {
                             el.textContent = assistantContent;
                         }
-                    } else if (role === 'assistant' && contextLevel === 0) {
-                        // Assistant response (level 0)
+                    } else if (role === 'assistant' && (contextLevel === 0 || contextLevel === 2)) {
+                        // Assistant/Codex response (levels 0 and 2)
                         assistantContent += chunk;
                         const el = document.getElementById('streaming-message');
                         if (el) {
-                            el.innerHTML = parseMarkdown(assistantContent);
+                            if (contextLevel === 2) {
+                                el.textContent = assistantContent;
+                            } else {
+                                renderAssistantMessage(el, assistantContent, contextLevel);
+                            }
                         }
                     }
                     scrollHistoryToBottom();
@@ -2505,9 +2696,14 @@
 
                 const unlistenDone = await listen('chat-stream-done', async (event) => {
                     console.log('[Chat] Stream done:', event.payload);
-                    // Clean up IDs
                     const streamEl = document.getElementById('streaming-message');
-                    if (streamEl) streamEl.removeAttribute('id');
+                    if (streamEl) {
+                        const payload = event.payload || {};
+                        if (payload.role === 'assistant') {
+                            renderAssistantMessage(streamEl, payload.full_content || assistantContent, contextLevel);
+                        }
+                        streamEl.removeAttribute('id');
+                    }
                 });
 
                 const unlistenError = await listen('chat-stream-error', (event) => {
@@ -2590,6 +2786,30 @@
         });
 
         // ============ Chat History ============
+        historyContent.addEventListener('click', async (event) => {
+            const openBtn = event.target.closest('.codex-open-btn');
+            if (!openBtn) return;
+
+            const workspaceDir = openBtn.getAttribute('data-workspace');
+            if (!workspaceDir) return;
+
+            try {
+                const websiteFile = openBtn.getAttribute('data-website');
+                if (websiteFile) {
+                    await invoke('open_codex_website', { workspaceDir, filePath: websiteFile });
+                    updateStatus('Opened website output', 'listening');
+                } else {
+                    await invoke('open_codex_output', { workspaceDir });
+                    updateStatus('Opened output folder', 'listening');
+                }
+                setTimeout(() => updateStatus('', ''), 1200);
+            } catch (error) {
+                console.error('[Codex] Failed to open output:', error);
+                updateStatus('Failed to open output', 'error');
+                setTimeout(() => updateStatus('', ''), 1500);
+            }
+        });
+
         async function loadChatHistory() {
             try {
                 const history = await invoke('get_chat_history');
@@ -2605,11 +2825,12 @@
                     div.className = `history-message ${msg.role}`;
 
                     // Store context level for filtering
-                    div.setAttribute('data-context-level', msg.context_level || 0);
+                    const msgContextLevel = msg.context_level || 0;
+                    div.setAttribute('data-context-level', msgContextLevel);
 
                     // Use markdown parsing for assistant messages, plain text for user/character
                     if (msg.role === 'assistant') {
-                        div.innerHTML = parseMarkdown(msg.content);
+                        renderAssistantMessage(div, msg.content, msgContextLevel);
                     } else {
                         div.textContent = msg.content;
                     }
