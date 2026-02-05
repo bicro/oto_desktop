@@ -451,6 +451,32 @@
             line-height: 1.45;
         }
 
+        .codex-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .codex-open-btn {
+            border: 1px solid rgba(255, 210, 143, 0.4);
+            background: rgba(255, 184, 77, 0.12);
+            color: #ffdca8;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .codex-open-btn:hover {
+            background: rgba(255, 184, 77, 0.2);
+            border-color: rgba(255, 210, 143, 0.6);
+            color: #fff0d7;
+        }
+
         .history-message.focused,
         .history-message p.focused,
         .history-message h2.focused,
@@ -1990,6 +2016,8 @@
                 return null;
             }
 
+            const websiteFile = result.files_touched.find(file => /\.(html?|HTML?)$/.test(file));
+
             const filesHtml = result.files_touched.length > 0
                 ? result.files_touched.map(file => `<li>${escapeHtml(file)}</li>`).join('')
                 : '<li>No files created</li>';
@@ -2012,6 +2040,10 @@
                     <div>
                         <div class="codex-section-title">Output</div>
                         <pre class="codex-output">${escapeHtml(result.output)}</pre>
+                    </div>
+                    <div class="codex-actions">
+                        ${websiteFile ? `<button class="codex-open-btn" data-workspace="${escapeHtml(result.workspace_dir)}" data-website="${escapeHtml(websiteFile)}">Open Website</button>` : ''}
+                        <button class="codex-open-btn" data-workspace="${escapeHtml(result.workspace_dir)}">Open Output</button>
                     </div>
                 </div>
             `;
@@ -2292,6 +2324,30 @@
         });
 
         // ============ Chat History ============
+        historyContent.addEventListener('click', async (event) => {
+            const openBtn = event.target.closest('.codex-open-btn');
+            if (!openBtn) return;
+
+            const workspaceDir = openBtn.getAttribute('data-workspace');
+            if (!workspaceDir) return;
+
+            try {
+                const websiteFile = openBtn.getAttribute('data-website');
+                if (websiteFile) {
+                    await invoke('open_codex_website', { workspaceDir, filePath: websiteFile });
+                    updateStatus('Opened website output', 'listening');
+                } else {
+                    await invoke('open_codex_output', { workspaceDir });
+                    updateStatus('Opened output folder', 'listening');
+                }
+                setTimeout(() => updateStatus('', ''), 1200);
+            } catch (error) {
+                console.error('[Codex] Failed to open output:', error);
+                updateStatus('Failed to open output', 'error');
+                setTimeout(() => updateStatus('', ''), 1500);
+            }
+        });
+
         async function loadChatHistory() {
             try {
                 const history = await invoke('get_chat_history');

@@ -2816,6 +2816,126 @@ async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[command]
+async fn open_codex_output(workspace_dir: String) -> Result<(), String> {
+    let workspace_root = get_codex_workspace_dir()?;
+    std::fs::create_dir_all(&workspace_root)
+        .map_err(|e| format!("Failed to create Codex workspace root: {}", e))?;
+
+    let requested = PathBuf::from(workspace_dir);
+    let target_dir = if requested.is_absolute() {
+        requested
+    } else {
+        workspace_root.join(requested)
+    };
+
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|e| format!("Failed to create output directory: {}", e))?;
+
+    let canonical_root = std::fs::canonicalize(&workspace_root)
+        .map_err(|e| format!("Failed to resolve workspace root: {}", e))?;
+    let canonical_target = std::fs::canonicalize(&target_dir)
+        .map_err(|e| format!("Failed to resolve output directory: {}", e))?;
+
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err("Output path is outside Codex workspace".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&canonical_target)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&canonical_target)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&canonical_target)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    Ok(())
+}
+
+#[command]
+async fn open_codex_website(workspace_dir: String, file_path: String) -> Result<(), String> {
+    let workspace_root = get_codex_workspace_dir()?;
+    std::fs::create_dir_all(&workspace_root)
+        .map_err(|e| format!("Failed to create Codex workspace root: {}", e))?;
+
+    let requested_workspace = PathBuf::from(workspace_dir);
+    let workspace_dir = if requested_workspace.is_absolute() {
+        requested_workspace
+    } else {
+        workspace_root.join(requested_workspace)
+    };
+
+    std::fs::create_dir_all(&workspace_dir)
+        .map_err(|e| format!("Failed to create workspace directory: {}", e))?;
+
+    let safe_relative_path = validate_codex_relative_path(&file_path)?;
+    let target_file = workspace_dir.join(&safe_relative_path);
+    let extension = target_file
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if extension != "html" && extension != "htm" {
+        return Err("Only HTML files can be opened as website output".to_string());
+    }
+
+    if !target_file.exists() {
+        return Err("Website file does not exist".to_string());
+    }
+
+    let canonical_root = std::fs::canonicalize(&workspace_root)
+        .map_err(|e| format!("Failed to resolve workspace root: {}", e))?;
+    let canonical_target = std::fs::canonicalize(&target_file)
+        .map_err(|e| format!("Failed to resolve website file: {}", e))?;
+
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err("Website path is outside Codex workspace".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&canonical_target)
+            .spawn()
+            .map_err(|e| format!("Failed to open website: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&canonical_target)
+            .spawn()
+            .map_err(|e| format!("Failed to open website: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&canonical_target)
+            .spawn()
+            .map_err(|e| format!("Failed to open website: {}", e))?;
+    }
+
+    Ok(())
+}
+
 // ============ Main ============
 
 fn main() {
@@ -3047,6 +3167,8 @@ fn main() {
             take_screenshot,
             open_screenshots_folder,
             open_logs_folder,
+            open_codex_output,
+            open_codex_website,
             save_api_key,
             get_api_key,
             has_api_key,
