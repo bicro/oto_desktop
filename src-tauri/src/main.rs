@@ -170,6 +170,8 @@ pub struct LLMConfig {
     pub rp_model: String,
     pub openrouter_api_key: Option<String>,
     pub openai_api_key: Option<String>,
+    #[serde(default)]
+    pub groq_api_key: Option<String>,
     // Legacy field for migration
     #[serde(skip_serializing, default)]
     chat_model: Option<String>,
@@ -190,6 +192,7 @@ impl Default for LLMConfig {
             rp_model: default_rp_model(),
             openrouter_api_key: None,
             openai_api_key: None,
+            groq_api_key: None,
             chat_model: None,
         }
     }
@@ -841,6 +844,73 @@ async fn has_openai_key() -> Result<bool, String> {
     // Fall back to checking LLM config
     let config = load_llm_config()?;
     Ok(config.openai_api_key.is_some())
+}
+
+// ============ Audio Transcription Commands ============
+
+#[command]
+async fn transcribe_audio(audio_base64: String) -> Result<String, String> {
+    info!("[transcribe_audio] Starting transcription...");
+
+    let config = load_llm_config()?;
+
+    // Try Groq first (free, fast), then OpenAI
+    let (api_key, api_url, model) = if let Some(ref groq_key) = config.groq_api_key {
+        // Groq is free and very fast for Whisper
+        (groq_key.clone(), "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3")
+    } else if let Some(ref openai_key) = config.openai_api_key {
+        // Use OpenAI if configured
+        (openai_key.clone(), "https://api.openai.com/v1/audio/transcriptions", "whisper-1")
+    } else {
+        return Err("Voice transcription requires a Groq or OpenAI API key. Get a free Groq key at console.groq.com".to_string());
+    };
+
+    // Decode base64 to bytes
+    let audio_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &audio_base64
+    ).map_err(|e| format!("Failed to decode audio: {}", e))?;
+
+    info!("[transcribe_audio] Audio size: {} bytes, using {}", audio_bytes.len(), api_url);
+
+    // Create multipart form
+    let part = reqwest::multipart::Part::bytes(audio_bytes)
+        .file_name("audio.webm")
+        .mime_str("audio/webm")
+        .map_err(|e| format!("Failed to create multipart: {}", e))?;
+
+    let form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("model", model);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(api_url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Transcription request failed: {}", e))?;
+
+    let status = response.status();
+    let body = response.text().await.map_err(|e| format!("Failed to read response: {}", e))?;
+
+    if !status.is_success() {
+        error!("[transcribe_audio] API error: {} - {}", status, body);
+        return Err(format!("Transcription failed: {}", body));
+    }
+
+    // Parse response - OpenAI whisper returns { "text": "..." }
+    let json: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    let text = json.get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    info!("[transcribe_audio] Transcription complete: {} chars", text.len());
+    Ok(text)
 }
 
 // ============ LLM Model Selection Commands ============
@@ -3040,6 +3110,7 @@ fn main() {
             save_openai_key,
             get_openai_key,
             has_openai_key,
+            transcribe_audio,
             get_llm_config_cmd,
             set_model,
             get_model_supports_vision,
