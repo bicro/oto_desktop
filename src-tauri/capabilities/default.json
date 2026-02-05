@@ -2,7 +2,7 @@
   "$schema": "https://schemas.tauri.app/config/2/capability",
   "identifier": "default",
   "description": "Default capabilities for Oto Desktop",
-  "windows": ["main", "overlay"],
+  "windows": ["main", "overlay-character_1", "overlay-character_2", "overlay-character_3"],
   "permissions": [
     "core:default",
     "core:event:default",

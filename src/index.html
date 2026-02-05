@@ -1715,6 +1715,40 @@
         </div>
     </div>
 
+    <div class="section collapsible" id="charactersSection">
+        <div class="section-header">
+            <div class="section-label">Characters</div>
+            <span class="section-toggle">▼</span>
+        </div>
+        <div class="section-content">
+            <div class="form-hint" style="margin-bottom: 8px;">F11 spawns/focuses next character (max 3)</div>
+            <div class="form-group">
+                <div class="form-label">Slot 1 (Primary)</div>
+                <input type="text" id="slot1ModelUrl" placeholder="https://example.com/model.zip" />
+            </div>
+            <div class="form-group">
+                <div class="form-label">Slot 2</div>
+                <div class="form-row">
+                    <input type="checkbox" id="slot2Enabled" />
+                    <label for="slot2Enabled" style="font-size: 11px; color: var(--text-muted);">Enabled</label>
+                </div>
+                <input type="text" id="slot2ModelUrl" placeholder="https://example.com/model.zip" />
+            </div>
+            <div class="form-group">
+                <div class="form-label">Slot 3</div>
+                <div class="form-row">
+                    <input type="checkbox" id="slot3Enabled" />
+                    <label for="slot3Enabled" style="font-size: 11px; color: var(--text-muted);">Enabled</label>
+                </div>
+                <input type="text" id="slot3ModelUrl" placeholder="https://example.com/model.zip" />
+            </div>
+            <div class="form-row">
+                <button class="btn btn-sm" id="saveCharacterSlotsBtn">Save Slots</button>
+                <button class="btn btn-outline btn-sm" id="spawnNextCharacterBtn">Spawn Next (F11)</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Prompts Section -->
     <div class="section collapsible" id="promptsSection">
         <div class="section-header">
@@ -1924,6 +1958,13 @@
         const currentModelName = document.getElementById('currentModelName');
         const modelProgress = document.getElementById('modelProgress');
         const modelProgressText = document.getElementById('modelProgressText');
+        const slot1ModelUrl = document.getElementById('slot1ModelUrl');
+        const slot2ModelUrl = document.getElementById('slot2ModelUrl');
+        const slot3ModelUrl = document.getElementById('slot3ModelUrl');
+        const slot2Enabled = document.getElementById('slot2Enabled');
+        const slot3Enabled = document.getElementById('slot3Enabled');
+        const saveCharacterSlotsBtn = document.getElementById('saveCharacterSlotsBtn');
+        const spawnNextCharacterBtn = document.getElementById('spawnNextCharacterBtn');
 
         // Tutorial collapse toggle
         const tutorialSection = document.getElementById('tutorialSection');
@@ -1945,7 +1986,7 @@
         }
 
         // Collapsible sections toggle
-        const collapsibleSections = ['apiSection', 'promptsSection', 'dataSection', 'characterSection', 'resetSection'];
+        const collapsibleSections = ['apiSection', 'modelSection', 'charactersSection', 'promptsSection', 'dataSection', 'startupSection', 'resetSection'];
 
         collapsibleSections.forEach(sectionId => {
             const section = document.getElementById(sectionId);
@@ -2311,6 +2352,41 @@
             }
         }
 
+        async function loadCharacterSlots() {
+            try {
+                const slots = await invoke('get_character_slots');
+                const byId = {};
+                slots.forEach(slot => { byId[slot.slot_id] = slot; });
+                slot1ModelUrl.value = byId.character_1?.model_url || '';
+                slot2ModelUrl.value = byId.character_2?.model_url || '';
+                slot3ModelUrl.value = byId.character_3?.model_url || '';
+                slot2Enabled.checked = !!byId.character_2?.enabled;
+                slot3Enabled.checked = !!byId.character_3?.enabled;
+            } catch (err) {
+                console.error('Failed to load character slots:', err);
+            }
+        }
+
+        saveCharacterSlotsBtn.addEventListener('click', async () => {
+            try {
+                await invoke('save_character_slot', { slotId: 'character_1', modelUrl: slot1ModelUrl.value.trim(), enabled: true });
+                await invoke('save_character_slot', { slotId: 'character_2', modelUrl: slot2ModelUrl.value.trim(), enabled: slot2Enabled.checked });
+                await invoke('save_character_slot', { slotId: 'character_3', modelUrl: slot3ModelUrl.value.trim(), enabled: slot3Enabled.checked });
+                showToast('Character slots saved', 'success');
+            } catch (err) {
+                showToast('Failed to save character slots: ' + err, 'error');
+            }
+        });
+
+        spawnNextCharacterBtn.addEventListener('click', async () => {
+            try {
+                const result = await invoke('spawn_or_focus_next_character');
+                showToast(`Character ${result.character_id} ${result.action}`, 'success');
+            } catch (err) {
+                showToast('Failed to spawn character: ' + err, 'error');
+            }
+        });
+
         applyModelBtn.addEventListener('click', async () => {
             const activeTab = document.querySelector('.model-tab.active');
             const isUrlMode = !activeTab || activeTab.dataset.source === 'url';
@@ -2402,6 +2478,7 @@
 
         // Load model config on startup
         loadModelConfig();
+        loadCharacterSlots();
 
         // Head tracking toggle
         const headTrackingToggle = document.getElementById('headTrackingToggle');
@@ -2612,6 +2689,7 @@
 
         // Listen for overlay visibility changes
         listen('overlay-visibility-changed', (event) => {
+            if (event.payload.character_id && event.payload.character_id !== 'character_1') return;
             isOverlayVisible = event.payload.visible;
             updateSpawnButton();
         });

@@ -8,7 +8,10 @@ mod paths;
 mod prompts;
 
 // Re-exports for internal use
-use db::{clear_chat_history_internal, get_chat_history_internal, store_chat_message};
+use db::{
+    clear_chat_history_internal_for_character, get_chat_history_internal,
+    get_chat_history_internal_for_character, store_chat_message, store_chat_message_for_character,
+};
 use models::{ChatMessage, ChatResponse};
 use paths::*;
 use prompts::*;
@@ -20,6 +23,7 @@ use std::io::{Read, Write as IoWrite};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use tauri::http::Response;
 use tauri::menu::{Menu, MenuItem};
@@ -139,6 +143,22 @@ impl Default for ModelConfig {
 }
 
 fn load_model_config() -> Result<ModelConfig, String> {
+    load_model_config_for_character("character_1")
+}
+
+fn load_model_config_for_character(character_id: &str) -> Result<ModelConfig, String> {
+    let slots = load_character_slots()?;
+    if let Some(slot) = slots.into_iter().find(|s| s.slot_id == character_id && s.enabled) {
+        if let (Some(folder), Some(model_file)) = (slot.folder, slot.model_file) {
+            return Ok(ModelConfig {
+                url: slot.model_url,
+                folder,
+                model_file,
+                texture_folder: slot.texture_folder,
+            });
+        }
+    }
+
     let config_path = get_model_config_path()?;
     if config_path.exists() {
         let content = std::fs::read_to_string(&config_path)
@@ -150,6 +170,24 @@ fn load_model_config() -> Result<ModelConfig, String> {
 }
 
 fn save_model_config(config: &ModelConfig) -> Result<(), String> {
+    save_model_config_for_character("character_1", config)
+}
+
+fn save_model_config_for_character(character_id: &str, config: &ModelConfig) -> Result<(), String> {
+    let mut slots = load_character_slots()?;
+    if let Some(slot) = slots.iter_mut().find(|s| s.slot_id == character_id) {
+        slot.model_url = config.url.clone();
+        slot.folder = Some(config.folder.clone());
+        slot.model_file = Some(config.model_file.clone());
+        slot.texture_folder = config.texture_folder.clone();
+        slot.enabled = true;
+    }
+    save_character_slots(&slots)?;
+
+    if character_id != "character_1" {
+        return Ok(());
+    }
+
     let config_path = get_model_config_path()?;
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)
@@ -158,6 +196,115 @@ fn save_model_config(config: &ModelConfig) -> Result<(), String> {
     let content = serde_json::to_string_pretty(config)
         .map_err(|e| format!("Failed to serialize model config: {}", e))?;
     std::fs::write(&config_path, content).map_err(|e| format!("Failed to save model config: {}", e))
+}
+
+const CHARACTER_IDS: [&str; 3] = ["character_1", "character_2", "character_3"];
+const PRIMARY_CHARACTER_ID: &str = "character_1";
+const MAX_CHARACTER_OVERLAYS: usize = 3;
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CharacterSlotConfig {
+    pub slot_id: String,
+    pub model_url: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub folder: Option<String>,
+    #[serde(default)]
+    pub model_file: Option<String>,
+    #[serde(default)]
+    pub texture_folder: Option<String>,
+}
+
+impl CharacterSlotConfig {
+    fn default_with_id(slot_id: &str) -> Self {
+        let default = ModelConfig::default();
+        let is_primary = slot_id == PRIMARY_CHARACTER_ID;
+        Self {
+            slot_id: slot_id.to_string(),
+            model_url: if is_primary {
+                default.url
+            } else {
+                String::new()
+            },
+            enabled: is_primary,
+            folder: if is_primary { Some(default.folder) } else { None },
+            model_file: if is_primary {
+                Some(default.model_file)
+            } else {
+                None
+            },
+            texture_folder: if is_primary {
+                default.texture_folder
+            } else {
+                None
+            },
+        }
+    }
+}
+
+fn merge_character_slots(slots: Vec<CharacterSlotConfig>) -> Vec<CharacterSlotConfig> {
+    let mut merged = Vec::new();
+    for slot_id in CHARACTER_IDS {
+        if let Some(slot) = slots.iter().find(|s| s.slot_id == slot_id).cloned() {
+            merged.push(slot);
+        } else {
+            merged.push(CharacterSlotConfig::default_with_id(slot_id));
+        }
+    }
+    merged
+}
+
+fn load_character_slots() -> Result<Vec<CharacterSlotConfig>, String> {
+    let path = get_characters_config_path()?;
+    if path.exists() {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read characters config: {}", e))?;
+        let parsed: Vec<CharacterSlotConfig> = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse characters config: {}", e))?;
+        Ok(merge_character_slots(parsed))
+    } else {
+        let slots = migrate_or_default_character_slots()?;
+        save_character_slots(&slots)?;
+        Ok(slots)
+    }
+}
+
+fn save_character_slots(slots: &[CharacterSlotConfig]) -> Result<(), String> {
+    let path = get_characters_config_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+    let merged = merge_character_slots(slots.to_vec());
+    let content = serde_json::to_string_pretty(&merged)
+        .map_err(|e| format!("Failed to serialize characters config: {}", e))?;
+    std::fs::write(path, content).map_err(|e| format!("Failed to write characters config: {}", e))
+}
+
+fn migrate_or_default_character_slots() -> Result<Vec<CharacterSlotConfig>, String> {
+    let mut slots = merge_character_slots(vec![]);
+    let legacy_path = get_model_config_path()?;
+    if legacy_path.exists() {
+        let content = std::fs::read_to_string(&legacy_path)
+            .map_err(|e| format!("Failed to read legacy model config: {}", e))?;
+        if let Ok(legacy) = serde_json::from_str::<ModelConfig>(&content) {
+            if let Some(primary) = slots.iter_mut().find(|s| s.slot_id == PRIMARY_CHARACTER_ID) {
+                primary.model_url = legacy.url;
+                primary.enabled = true;
+                primary.folder = Some(legacy.folder);
+                primary.model_file = Some(legacy.model_file);
+                primary.texture_folder = legacy.texture_folder;
+            }
+        }
+    }
+    Ok(slots)
+}
+
+fn overlay_label_for_character(character_id: &str) -> String {
+    format!("overlay-{}", character_id)
+}
+
+fn is_valid_character_id(character_id: &str) -> bool {
+    CHARACTER_IDS.contains(&character_id)
 }
 
 // ============ LLM Configuration ============
@@ -464,66 +611,83 @@ fn find_texture_folder(model_dir: &PathBuf) -> Option<String> {
     None
 }
 
-#[command]
-async fn init_app(app: AppHandle) -> Result<InitStatus, String> {
-    let models_dir = get_models_dir()?;
-
-    println!("[init_app] Starting initialization...");
-    println!("[init_app] Models dir: {:?}", models_dir);
-
-    // Load or create model config
-    let mut config = load_model_config().unwrap_or_default();
-
-    // Emit progress events to frontend
-    let emit_progress = |step: &str, message: &str| {
-        println!("[init_app] {}: {}", step, message);
-        let _ = app.emit("init-progress", json!({ "step": step, "message": message }));
-    };
-
-    // Check if model exists
-    let model_dir = models_dir.join(&config.folder);
-    if !model_dir.exists() {
-        emit_progress("model", "Downloading model...");
-        match download_and_extract_zip(&config.url, &models_dir).await {
-            Ok(_) => {
-                // Auto-detect model structure after download
-                match detect_model_structure(&models_dir) {
-                    Ok((folder, model_file, texture_folder)) => {
-                        config.folder = folder;
-                        config.model_file = model_file;
-                        config.texture_folder = texture_folder;
-                        save_model_config(&config)?;
-                        emit_progress("model", "Model ready!");
-                    }
-                    Err(e) => {
-                        println!(
-                            "[init_app] WARNING: Could not detect model structure: {}",
-                            e
-                        );
-                        // Use defaults for the default model
-                        save_model_config(&config)?;
-                        emit_progress("model", "Model ready!");
-                    }
-                }
-            }
-            Err(e) => {
-                println!("[init_app] ERROR downloading model: {}", e);
-                return Err(format!("Failed to download model: {}", e));
-            }
-        }
-    } else {
-        println!(
-            "[init_app] Model already exists at {:?}, skipping download",
-            model_dir
-        );
-        // Ensure config is saved even if model already exists
-        if !get_model_config_path()?.exists() {
-            save_model_config(&config)?;
-        }
+async fn ensure_model_ready_for_character(character_id: &str) -> Result<ModelConfig, String> {
+    if !is_valid_character_id(character_id) {
+        return Err("Invalid character id".to_string());
     }
 
+    let slots = load_character_slots()?;
+    let slot = slots
+        .iter()
+        .find(|s| s.slot_id == character_id)
+        .ok_or_else(|| "Character slot not found".to_string())?;
+
+    let model_url = if slot.model_url.trim().is_empty() {
+        if character_id == PRIMARY_CHARACTER_ID {
+            DEFAULT_MODEL_URL.to_string()
+        } else {
+            return Err(format!("{} has no configured model URL", character_id));
+        }
+    } else {
+        slot.model_url.clone()
+    };
+
+    let models_dir = get_models_dir_for_character(character_id)?;
+    let has_configured_model = match (&slot.folder, &slot.model_file) {
+        (Some(folder), Some(model_file)) => models_dir.join(folder).join(model_file).exists(),
+        _ => false,
+    };
+    if has_configured_model {
+        return Ok(ModelConfig {
+            url: model_url,
+            folder: slot.folder.clone().unwrap_or_default(),
+            model_file: slot.model_file.clone().unwrap_or_default(),
+            texture_folder: slot.texture_folder.clone(),
+        });
+    }
+
+    if models_dir.exists() {
+        std::fs::remove_dir_all(&models_dir)
+            .map_err(|e| format!("Failed to clear models directory: {}", e))?;
+    }
+    std::fs::create_dir_all(&models_dir)
+        .map_err(|e| format!("Failed to create models directory: {}", e))?;
+
+    download_and_extract_zip(&model_url, &models_dir).await?;
+    let (folder, model_file, texture_folder) = detect_model_structure(&models_dir)?;
+
+    let config = ModelConfig {
+        url: model_url.clone(),
+        folder: folder.clone(),
+        model_file: model_file.clone(),
+        texture_folder: texture_folder.clone(),
+    };
+
+    let mut updated_slots = slots;
+    if let Some(updated) = updated_slots.iter_mut().find(|s| s.slot_id == character_id) {
+        updated.model_url = model_url;
+        updated.enabled = true;
+        updated.folder = Some(folder);
+        updated.model_file = Some(model_file);
+        updated.texture_folder = texture_folder;
+    }
+    save_character_slots(&updated_slots)?;
+
+    if character_id == PRIMARY_CHARACTER_ID {
+        save_model_config(&config)?;
+    }
+    Ok(config)
+}
+
+#[command]
+async fn init_app(app: AppHandle) -> Result<InitStatus, String> {
+    let emit_progress = |step: &str, message: &str| {
+        let _ = app.emit("init-progress", json!({ "step": step, "message": message }));
+    };
+    emit_progress("model", "Preparing primary character...");
+    let _ = ensure_model_ready_for_character(PRIMARY_CHARACTER_ID).await?;
+    let models_dir = get_models_dir_for_character(PRIMARY_CHARACTER_ID)?;
     emit_progress("done", "All ready!");
-    println!("[init_app] Initialization complete!");
 
     Ok(InitStatus {
         ready: true,
@@ -534,10 +698,19 @@ async fn init_app(app: AppHandle) -> Result<InitStatus, String> {
 
 #[command]
 async fn get_paths() -> Result<String, String> {
-    let models_dir = get_models_dir()?;
+    let models_dir = get_models_dir_for_character(PRIMARY_CHARACTER_ID)?;
     let path_str = models_dir.to_string_lossy().to_string();
     info!("[get_paths] Models directory: {}", path_str);
     Ok(path_str)
+}
+
+#[command]
+async fn get_paths_for_character(character_id: String) -> Result<String, String> {
+    if !is_valid_character_id(&character_id) {
+        return Err("Invalid character id".to_string());
+    }
+    let models_dir = get_models_dir_for_character(&character_id)?;
+    Ok(models_dir.to_string_lossy().to_string())
 }
 
 #[command]
@@ -556,7 +729,7 @@ async fn read_file_as_bytes(path: String) -> Result<Vec<u8>, String> {
 
 #[command]
 async fn is_initialized() -> Result<bool, String> {
-    let models_dir = get_models_dir()?;
+    let models_dir = get_models_dir_for_character(PRIMARY_CHARACTER_ID)?;
     let config = load_model_config().unwrap_or_default();
     Ok(models_dir.join(&config.folder).exists())
 }
@@ -565,73 +738,66 @@ async fn is_initialized() -> Result<bool, String> {
 
 #[command]
 async fn get_model_config() -> Result<ModelConfig, String> {
-    let config = load_model_config()?;
-    info!(
-        "[get_model_config] Loaded config - folder: {}, model_file: {}",
-        config.folder, config.model_file
-    );
-    Ok(config)
+    get_model_config_for_character(PRIMARY_CHARACTER_ID.to_string()).await
+}
+
+#[command]
+async fn get_model_config_for_character(character_id: String) -> Result<ModelConfig, String> {
+    if !is_valid_character_id(&character_id) {
+        return Err("Invalid character id".to_string());
+    }
+    ensure_model_ready_for_character(&character_id).await
 }
 
 #[command]
 async fn change_model(app: AppHandle, url: String) -> Result<ModelConfig, String> {
-    let models_dir = get_models_dir()?;
+    change_model_for_character(app, PRIMARY_CHARACTER_ID.to_string(), url).await
+}
 
-    println!("[change_model] Changing model to: {}", url);
-
-    // Reset zoom to 100% for new model
-    save_overlay_scale_to_file(1.0)?;
-
-    // Emit progress
-    let _ = app.emit(
-        "model-change-progress",
-        json!({ "status": "downloading", "message": "Downloading new model..." }),
-    );
-
-    // Clear existing models
-    if models_dir.exists() {
-        std::fs::remove_dir_all(&models_dir)
-            .map_err(|e| format!("Failed to clear models directory: {}", e))?;
+#[command]
+async fn change_model_for_character(
+    app: AppHandle,
+    character_id: String,
+    url: String,
+) -> Result<ModelConfig, String> {
+    if !is_valid_character_id(&character_id) {
+        return Err("Invalid character id".to_string());
     }
-    std::fs::create_dir_all(&models_dir)
-        .map_err(|e| format!("Failed to create models directory: {}", e))?;
+    if !url.ends_with(".zip") {
+        return Err("Model URL must point to a .zip file".to_string());
+    }
 
-    // Download and extract new model
-    download_and_extract_zip(&url, &models_dir).await?;
-
+    save_overlay_scale_to_file(1.0)?;
     let _ = app.emit(
         "model-change-progress",
-        json!({ "status": "detecting", "message": "Detecting model structure..." }),
+        json!({ "status": "downloading", "message": "Downloading new model...", "character_id": character_id }),
     );
 
-    // Detect model structure
-    let (folder, model_file, texture_folder) = detect_model_structure(&models_dir)?;
+    let mut slots = load_character_slots()?;
+    let slot = slots
+        .iter_mut()
+        .find(|s| s.slot_id == character_id)
+        .ok_or_else(|| "Character slot not found".to_string())?;
+    slot.model_url = url.clone();
+    slot.enabled = true;
+    slot.folder = None;
+    slot.model_file = None;
+    slot.texture_folder = None;
+    save_character_slots(&slots)?;
 
-    // Save new config
-    let config = ModelConfig {
-        url: url.clone(),
-        folder,
-        model_file,
-        texture_folder,
-    };
-    save_model_config(&config)?;
-
+    let config = ensure_model_ready_for_character(&character_id).await?;
+    if character_id == PRIMARY_CHARACTER_ID {
+        let _ = app.emit("overlay-scale-reset", json!({ "scale": 1.0 }));
+    }
     let _ = app.emit(
         "model-change-progress",
-        json!({ "status": "complete", "message": "Model changed successfully!" }),
+        json!({ "status": "complete", "message": "Model changed successfully!", "character_id": character_id }),
     );
-
-    // Notify frontend of scale reset
-    let _ = app.emit("overlay-scale-reset", json!({ "scale": 1.0 }));
-
-    println!("[change_model] Model changed successfully: {:?}", config);
-
     Ok(config)
 }
 
 #[command]
 async fn reset_model(app: AppHandle) -> Result<ModelConfig, String> {
-    // Reset to default model
     change_model(app, DEFAULT_MODEL_URL.to_string()).await
 }
 
@@ -640,7 +806,7 @@ async fn load_model_from_folder(
     app: AppHandle,
     folder_path: String,
 ) -> Result<ModelConfig, String> {
-    let models_dir = get_models_dir()?;
+    let models_dir = get_models_dir_for_character(PRIMARY_CHARACTER_ID)?;
     let source_path = PathBuf::from(&folder_path);
 
     println!("[load_model_from_folder] Loading from: {}", folder_path);
@@ -1285,13 +1451,14 @@ fn format_codex_content(result: &CodexUiResult) -> String {
     format!("```codex-result\n{}\n```", json)
 }
 
-fn emit_stream_chunk(app: &AppHandle, text: &str, context_level: u8) {
+fn emit_stream_chunk(app: &AppHandle, text: &str, context_level: u8, character_id: &str) {
     let _ = app.emit(
         "chat-stream-chunk",
         json!({
             "chunk": text,
             "role": "assistant",
-            "context_level": context_level
+            "context_level": context_level,
+            "character_id": character_id
         }),
     );
 }
@@ -1556,6 +1723,44 @@ async fn send_chat_message_stream(
     include_screenshot: bool,
     context_level: u8,
 ) -> Result<(), String> {
+    send_chat_message_stream_internal(
+        app,
+        PRIMARY_CHARACTER_ID,
+        message,
+        include_screenshot,
+        context_level,
+    )
+    .await
+}
+
+#[command]
+async fn send_chat_message_stream_for_character(
+    app: AppHandle,
+    character_id: String,
+    message: String,
+    include_screenshot: bool,
+    context_level: u8,
+) -> Result<(), String> {
+    if !is_valid_character_id(&character_id) {
+        return Err("Invalid character id".to_string());
+    }
+    send_chat_message_stream_internal(
+        app,
+        &character_id,
+        message,
+        include_screenshot,
+        context_level,
+    )
+    .await
+}
+
+async fn send_chat_message_stream_internal(
+    app: AppHandle,
+    character_id: &str,
+    message: String,
+    include_screenshot: bool,
+    context_level: u8,
+) -> Result<(), String> {
     if context_level != 2 {
         return Err("Only Codex chat (level 2) is enabled in this build".to_string());
     }
@@ -1567,9 +1772,9 @@ async fn send_chat_message_stream(
 
     if context_level == 2 {
         let timestamp = chrono::Utc::now().to_rfc3339();
-        store_chat_message(&timestamp, "user", &message, context_level)?;
+        store_chat_message_for_character(character_id, &timestamp, "user", &message, context_level)?;
 
-        emit_stream_chunk(&app, "Planning implementation...\n", context_level);
+        emit_stream_chunk(&app, "Planning implementation...\n", context_level, character_id);
 
         let workspace_root = get_codex_workspace_dir()?;
         std::fs::create_dir_all(&workspace_root)
@@ -1584,18 +1789,19 @@ async fn send_chat_message_stream(
             &app,
             &format!("Workspace: {}\n", workspace_dir.to_string_lossy()),
             context_level,
+            character_id,
         );
-        emit_stream_chunk(&app, "Generating code with Codex...\n", context_level);
+        emit_stream_chunk(&app, "Generating code with Codex...\n", context_level, character_id);
 
         let codex_result = generate_codex_workspace_result(&api_key, &message, &workspace_dir).await?;
 
-        emit_stream_chunk(&app, "Writing files...\n", context_level);
+        emit_stream_chunk(&app, "Writing files...\n", context_level, character_id);
         let touched_files = apply_codex_files(&workspace_dir, &codex_result.files)?;
         if touched_files.is_empty() {
-            emit_stream_chunk(&app, "No files were created.\n", context_level);
+            emit_stream_chunk(&app, "No files were created.\n", context_level, character_id);
         } else {
             for file in &touched_files {
-                emit_stream_chunk(&app, &format!("Created: {}\n", file), context_level);
+                emit_stream_chunk(&app, &format!("Created: {}\n", file), context_level, character_id);
             }
         }
 
@@ -1606,14 +1812,21 @@ async fn send_chat_message_stream(
             output: codex_result.output,
         };
         let full_content = format_codex_content(&ui_result);
-        store_chat_message(&timestamp, "assistant", &full_content, context_level)?;
+        store_chat_message_for_character(
+            character_id,
+            &timestamp,
+            "assistant",
+            &full_content,
+            context_level,
+        )?;
 
         let _ = app.emit(
             "chat-stream-done",
             json!({
                 "role": "assistant",
                 "context_level": context_level,
-                "full_content": full_content.clone()
+                "full_content": full_content.clone(),
+                "character_id": character_id
             }),
         );
 
@@ -1633,7 +1846,7 @@ async fn send_chat_message_stream(
     };
 
     // Get recent chat history for context
-    let history = get_chat_history_internal(10)?;
+    let history = get_chat_history_internal_for_character(character_id, 10)?;
 
     // Build messages array with system prompt
     let mut messages: Vec<Value> = vec![json!({
@@ -1689,7 +1902,7 @@ async fn send_chat_message_stream(
 
     // Store user message
     let timestamp = chrono::Utc::now().to_rfc3339();
-    store_chat_message(&timestamp, "user", &message, context_level)?;
+    store_chat_message_for_character(character_id, &timestamp, "user", &message, context_level)?;
 
     // Determine the role for this context level
     let response_role = match context_level {
@@ -1702,7 +1915,10 @@ async fn send_chat_message_stream(
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        let _ = app.emit("chat-stream-error", json!({ "error": error_text }));
+        let _ = app.emit(
+            "chat-stream-error",
+            json!({ "error": error_text, "character_id": character_id }),
+        );
         return Err(format!("API error: {}", error_text));
     }
 
@@ -1741,7 +1957,8 @@ async fn send_chat_message_stream(
                                     json!({
                                         "chunk": content,
                                         "role": response_role,
-                                        "context_level": context_level
+                                        "context_level": context_level,
+                                        "character_id": character_id
                                     }),
                                 );
                             }
@@ -1750,14 +1967,17 @@ async fn send_chat_message_stream(
                 }
             }
             Err(e) => {
-                let _ = app.emit("chat-stream-error", json!({ "error": e.to_string() }));
+                let _ = app.emit(
+                    "chat-stream-error",
+                    json!({ "error": e.to_string(), "character_id": character_id }),
+                );
                 return Err(format!("Stream error: {}", e));
             }
         }
     }
 
     // Store the complete response
-    store_chat_message(&timestamp, response_role, &full_content, context_level)?;
+    store_chat_message_for_character(character_id, &timestamp, response_role, &full_content, context_level)?;
 
     // Emit completion event
     let _ = app.emit(
@@ -1765,7 +1985,8 @@ async fn send_chat_message_stream(
         json!({
             "role": response_role,
             "context_level": context_level,
-            "full_content": full_content.clone()
+            "full_content": full_content.clone(),
+            "character_id": character_id
         }),
     );
 
@@ -1776,12 +1997,28 @@ async fn send_chat_message_stream(
 
 #[command]
 async fn get_chat_history() -> Result<Vec<ChatMessage>, String> {
-    get_chat_history_internal(100)
+    get_chat_history_internal_for_character(PRIMARY_CHARACTER_ID, 100)
 }
 
 #[command]
 async fn clear_chat_history() -> Result<(), String> {
-    clear_chat_history_internal()
+    clear_chat_history_internal_for_character(PRIMARY_CHARACTER_ID)
+}
+
+#[command]
+async fn get_chat_history_for_character(character_id: String) -> Result<Vec<ChatMessage>, String> {
+    if !is_valid_character_id(&character_id) {
+        return Err("Invalid character id".to_string());
+    }
+    get_chat_history_internal_for_character(&character_id, 100)
+}
+
+#[command]
+async fn clear_chat_history_for_character(character_id: String) -> Result<(), String> {
+    if !is_valid_character_id(&character_id) {
+        return Err("Invalid character id".to_string());
+    }
+    clear_chat_history_internal_for_character(&character_id)
 }
 
 #[command]
@@ -1794,78 +2031,15 @@ async fn reload_character(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    println!("[Rust] reload_character called");
-
-    // Close existing overlay window if it exists
-    if let Some(overlay) = app.get_webview_window("overlay") {
-        println!("[Rust] Closing existing overlay window");
-        overlay
-            .close()
-            .map_err(|e| format!("Failed to close overlay: {}", e))?;
-
-        // Small delay to ensure window is closed
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    }
-
-    println!("[Rust] Creating new overlay window");
-
-    // Load saved scale (default 1.0)
-    let scale = load_overlay_scale();
-    let width = paths::DEFAULT_OVERLAY_WIDTH * scale;
-    let height = paths::DEFAULT_OVERLAY_HEIGHT * scale;
-
-    // Recreate the overlay window with fresh state
-    let overlay = tauri::WebviewWindowBuilder::new(
-        &app,
-        "overlay",
-        tauri::WebviewUrl::App("overlay.html".into()),
-    )
-    .title("Overlay")
-    .visible(false)
-    .transparent(true)
-    .decorations(false)
-    .shadow(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .inner_size(width, height)
-    .resizable(true)
-    .build()
-    .map_err(|e| format!("Failed to create overlay window: {}", e))?;
-
-    println!("[Rust] New overlay window created, configuring...");
-
-    // Configure the overlay (make it click-through, etc.)
-    configure_overlay(&overlay)?;
-
-    // Position in bottom right of screen
-    if let Ok(Some(monitor)) = overlay.current_monitor() {
-        let screen_size = monitor.size();
-        let screen_pos = monitor.position();
-        if let Ok(window_size) = overlay.outer_size() {
-            let x = screen_pos.x + (screen_size.width as i32) - (window_size.width as i32);
-            let y = screen_pos.y + (screen_size.height as i32) - (window_size.height as i32);
-            let _ =
-                overlay.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
-        }
-    }
-
-    // Show the overlay
-    overlay
-        .show()
-        .map_err(|e| format!("Failed to show overlay: {}", e))?;
-
-    // Update state
-    *state.overlay_visible.lock().unwrap() = true;
-
-    println!("[Rust] Overlay recreated successfully - DOMContentLoaded will trigger model load");
-    Ok("Character reloaded!".to_string())
+    reload_character_for_character(app, state, PRIMARY_CHARACTER_ID.to_string()).await
 }
 
 // ============ App State ============
 
 #[derive(Default)]
 pub struct AppState {
-    pub overlay_visible: Mutex<bool>,
+    pub overlay_visible: Mutex<HashMap<String, bool>>,
+    pub active_character_id: Mutex<String>,
     pub toggle_menu_item: Mutex<Option<MenuItem<tauri::Wry>>>,
 }
 
@@ -1913,69 +2087,166 @@ fn configure_overlay(_window: &tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
-#[command]
-async fn show_overlay(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    info!("show_overlay called");
-    if let Some(window) = app.get_webview_window("overlay") {
-        info!("show_overlay: overlay window found");
-        configure_overlay(&window)?;
+fn character_cascade_offset(character_id: &str) -> i32 {
+    match character_id {
+        "character_2" => 36,
+        "character_3" => 72,
+        _ => 0,
+    }
+}
 
-        // Position in bottom right of screen
-        if let Ok(Some(monitor)) = window.current_monitor() {
-            let screen_size = monitor.size();
-            let screen_pos = monitor.position();
-            if let Ok(window_size) = window.outer_size() {
-                let x = screen_pos.x + (screen_size.width as i32) - (window_size.width as i32);
-                let y = screen_pos.y + (screen_size.height as i32) - (window_size.height as i32);
-                let _ = window
-                    .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
-                info!("show_overlay: positioned at ({}, {})", x, y);
-            }
+fn ensure_overlay_window(app: &AppHandle, character_id: &str) -> Result<tauri::WebviewWindow, String> {
+    let label = overlay_label_for_character(character_id);
+    if let Some(window) = app.get_webview_window(&label) {
+        return Ok(window);
+    }
+
+    let scale = load_overlay_scale();
+    let width = paths::DEFAULT_OVERLAY_WIDTH * scale;
+    let height = paths::DEFAULT_OVERLAY_HEIGHT * scale;
+
+    tauri::WebviewWindowBuilder::new(
+        app,
+        &label,
+        tauri::WebviewUrl::App(format!("overlay.html?character_id={}", character_id).into()),
+    )
+    .title("Overlay")
+    .visible(false)
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .inner_size(width, height)
+    .resizable(true)
+    .build()
+    .map_err(|e| format!("Failed to create overlay window: {}", e))
+}
+
+fn get_overlay_visible_for_character(state: &tauri::State<'_, AppState>, character_id: &str) -> bool {
+    *state
+        .overlay_visible
+        .lock()
+        .unwrap()
+        .get(character_id)
+        .unwrap_or(&false)
+}
+
+fn set_overlay_visible_for_character(
+    state: &tauri::State<'_, AppState>,
+    character_id: &str,
+    visible: bool,
+) {
+    state
+        .overlay_visible
+        .lock()
+        .unwrap()
+        .insert(character_id.to_string(), visible);
+}
+
+fn get_active_character_id_from_app(app: &AppHandle) -> String {
+    let state = app.state::<AppState>();
+    let active = state.active_character_id.lock().unwrap().clone();
+    if active.is_empty() {
+        PRIMARY_CHARACTER_ID.to_string()
+    } else {
+        active
+    }
+}
+
+fn get_active_overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+    let active_id = get_active_character_id_from_app(app);
+    app.get_webview_window(&overlay_label_for_character(&active_id))
+}
+
+async fn show_overlay_for_character(
+    app: AppHandle,
+    state: &tauri::State<'_, AppState>,
+    character_id: &str,
+) -> Result<(), String> {
+    let window = ensure_overlay_window(&app, character_id)?;
+    configure_overlay(&window)?;
+
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let screen_size = monitor.size();
+        let screen_pos = monitor.position();
+        if let Ok(window_size) = window.outer_size() {
+            let offset = character_cascade_offset(character_id);
+            let x = screen_pos.x + (screen_size.width as i32) - (window_size.width as i32) - offset;
+            let y = screen_pos.y + (screen_size.height as i32) - (window_size.height as i32) - offset;
+            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
         }
+    }
 
-        window.show().map_err(|e| e.to_string())?;
-        info!("show_overlay: window.show() completed");
-        window.set_focus().map_err(|e| e.to_string())?;
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
 
-        // Update state
-        *state.overlay_visible.lock().unwrap() = true;
+    set_overlay_visible_for_character(&state, character_id, true);
+    *state.active_character_id.lock().unwrap() = character_id.to_string();
 
-        // Update tray menu text
+    if character_id == PRIMARY_CHARACTER_ID {
         if let Some(menu_item) = state.toggle_menu_item.lock().unwrap().as_ref() {
             let _ = menu_item.set_text("Hide Character");
         }
-
-        // Emit event
-        let _ = app.emit("overlay-visibility-changed", json!({ "visible": true }));
-        info!("show_overlay: completed successfully");
-    } else {
-        info!("show_overlay: overlay window NOT found");
     }
+
+    let _ = app.emit(
+        "overlay-visibility-changed",
+        json!({ "visible": true, "character_id": character_id }),
+    );
     Ok(())
+}
+
+async fn hide_overlay_for_character(
+    app: AppHandle,
+    state: &tauri::State<'_, AppState>,
+    character_id: &str,
+) -> Result<(), String> {
+    let label = overlay_label_for_character(character_id);
+    if let Some(window) = app.get_webview_window(&label) {
+        window.hide().map_err(|e| e.to_string())?;
+    }
+
+    set_overlay_visible_for_character(&state, character_id, false);
+
+    if character_id == PRIMARY_CHARACTER_ID {
+        if let Some(menu_item) = state.toggle_menu_item.lock().unwrap().as_ref() {
+            let _ = menu_item.set_text("Show Character");
+        }
+    }
+
+    let _ = app.emit(
+        "overlay-visibility-changed",
+        json!({ "visible": false, "character_id": character_id }),
+    );
+    Ok(())
+}
+
+#[command]
+async fn show_overlay(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    show_overlay_for_character(app, &state, PRIMARY_CHARACTER_ID).await
 }
 
 #[command]
 async fn hide_overlay(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("overlay") {
-        window.hide().map_err(|e| e.to_string())?;
+    hide_overlay_for_character(app, &state, PRIMARY_CHARACTER_ID).await
+}
 
-        // Update state
-        *state.overlay_visible.lock().unwrap() = false;
-
-        // Update tray menu text
-        if let Some(menu_item) = state.toggle_menu_item.lock().unwrap().as_ref() {
-            let _ = menu_item.set_text("Show Character");
-        }
-
-        // Emit event
-        let _ = app.emit("overlay-visibility-changed", json!({ "visible": false }));
+#[command]
+async fn hide_overlay_for_character_cmd(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    character_id: String,
+) -> Result<(), String> {
+    if !is_valid_character_id(&character_id) {
+        return Err("Invalid character id".to_string());
     }
-    Ok(())
+    hide_overlay_for_character(app, &state, &character_id).await
 }
 
 #[command]
 async fn toggle_overlay(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    let is_visible = *state.overlay_visible.lock().unwrap();
+    let is_visible = get_overlay_visible_for_character(&state, PRIMARY_CHARACTER_ID);
 
     if is_visible {
         hide_overlay(app, state).await?;
@@ -1989,20 +2260,32 @@ async fn toggle_overlay(app: AppHandle, state: tauri::State<'_, AppState>) -> Re
 // Sync version for use in tray handlers (non-async context)
 fn toggle_overlay_sync(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let is_visible = *state.overlay_visible.lock().unwrap();
+    let is_visible = *state
+        .overlay_visible
+        .lock()
+        .unwrap()
+        .get(PRIMARY_CHARACTER_ID)
+        .unwrap_or(&false);
 
     if is_visible {
-        if let Some(window) = app.get_webview_window("overlay") {
+        if let Some(window) = app.get_webview_window(&overlay_label_for_character(PRIMARY_CHARACTER_ID)) {
             let _ = window.hide();
-            *state.overlay_visible.lock().unwrap() = false;
-            let _ = app.emit("overlay-visibility-changed", json!({ "visible": false }));
+            state
+                .overlay_visible
+                .lock()
+                .unwrap()
+                .insert(PRIMARY_CHARACTER_ID.to_string(), false);
+            let _ = app.emit(
+                "overlay-visibility-changed",
+                json!({ "visible": false, "character_id": PRIMARY_CHARACTER_ID }),
+            );
 
             // Update tray menu text
             if let Some(menu_item) = state.toggle_menu_item.lock().unwrap().as_ref() {
                 let _ = menu_item.set_text("Show Character");
             }
         }
-    } else if let Some(window) = app.get_webview_window("overlay") {
+    } else if let Ok(window) = ensure_overlay_window(app, PRIMARY_CHARACTER_ID) {
         let _ = configure_overlay(&window);
 
         // Position in bottom right of screen
@@ -2019,8 +2302,15 @@ fn toggle_overlay_sync(app: &AppHandle) {
 
         let _ = window.show();
         let _ = window.set_focus();
-        *state.overlay_visible.lock().unwrap() = true;
-        let _ = app.emit("overlay-visibility-changed", json!({ "visible": true }));
+        state
+            .overlay_visible
+            .lock()
+            .unwrap()
+            .insert(PRIMARY_CHARACTER_ID.to_string(), true);
+        let _ = app.emit(
+            "overlay-visibility-changed",
+            json!({ "visible": true, "character_id": PRIMARY_CHARACTER_ID }),
+        );
 
         // Update tray menu text
         if let Some(menu_item) = state.toggle_menu_item.lock().unwrap().as_ref() {
@@ -2031,7 +2321,160 @@ fn toggle_overlay_sync(app: &AppHandle) {
 
 #[command]
 async fn get_overlay_visible(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    Ok(*state.overlay_visible.lock().unwrap())
+    Ok(get_overlay_visible_for_character(&state, PRIMARY_CHARACTER_ID))
+}
+
+#[command]
+async fn reload_character_for_character(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    character_id: String,
+) -> Result<String, String> {
+    if !is_valid_character_id(&character_id) {
+        return Err("Invalid character id".to_string());
+    }
+
+    let label = overlay_label_for_character(&character_id);
+    if let Some(overlay) = app.get_webview_window(&label) {
+        overlay
+            .close()
+            .map_err(|e| format!("Failed to close overlay: {}", e))?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    show_overlay_for_character(app, &state, &character_id).await?;
+    Ok(format!("{} reloaded!", character_id))
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct SpawnResult {
+    pub character_id: String,
+    pub action: String,
+    pub visible_count: usize,
+}
+
+#[command]
+async fn get_character_slots() -> Result<Vec<CharacterSlotConfig>, String> {
+    load_character_slots()
+}
+
+#[command]
+async fn save_character_slot(slot_id: String, model_url: String, enabled: bool) -> Result<(), String> {
+    if !is_valid_character_id(&slot_id) {
+        return Err("Invalid slot_id".to_string());
+    }
+    if enabled && model_url.trim().is_empty() {
+        return Err("Enabled slot must have a model URL".to_string());
+    }
+    if !model_url.trim().is_empty() && !model_url.trim().ends_with(".zip") {
+        return Err("Model URL must be a .zip file".to_string());
+    }
+
+    let mut slots = load_character_slots()?;
+    if let Some(slot) = slots.iter_mut().find(|s| s.slot_id == slot_id) {
+        slot.model_url = model_url.trim().to_string();
+        slot.enabled = if slot.slot_id == PRIMARY_CHARACTER_ID {
+            true
+        } else {
+            enabled
+        };
+        if !slot.enabled {
+            slot.folder = None;
+            slot.model_file = None;
+            slot.texture_folder = None;
+        }
+    }
+    save_character_slots(&slots)
+}
+
+#[command]
+async fn get_active_character_id(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let id = state.active_character_id.lock().unwrap().clone();
+    if id.is_empty() {
+        Ok(PRIMARY_CHARACTER_ID.to_string())
+    } else {
+        Ok(id)
+    }
+}
+
+#[command]
+async fn set_active_character_id(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    character_id: String,
+) -> Result<(), String> {
+    if !is_valid_character_id(&character_id) {
+        return Err("Invalid character id".to_string());
+    }
+    *state.active_character_id.lock().unwrap() = character_id.clone();
+    let label = overlay_label_for_character(&character_id);
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+#[command]
+async fn spawn_or_focus_next_character(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<SpawnResult, String> {
+    let slots = load_character_slots()?;
+    let enabled: Vec<String> = slots
+        .iter()
+        .filter(|s| s.enabled && !s.model_url.trim().is_empty())
+        .map(|s| s.slot_id.clone())
+        .collect();
+
+    if enabled.is_empty() {
+        return Err("No enabled character slots configured".to_string());
+    }
+
+    let mut visible_ids: Vec<String> = enabled
+        .iter()
+        .filter(|id| get_overlay_visible_for_character(&state, id))
+        .cloned()
+        .collect();
+    visible_ids.sort();
+
+    if visible_ids.len() < MAX_CHARACTER_OVERLAYS {
+        if let Some(next_slot) = enabled
+            .iter()
+            .find(|id| !get_overlay_visible_for_character(&state, id))
+        {
+            ensure_model_ready_for_character(next_slot).await?;
+            show_overlay_for_character(app.clone(), &state, next_slot).await?;
+            let visible_count = enabled
+                .iter()
+                .filter(|id| get_overlay_visible_for_character(&state, id))
+                .count();
+            return Ok(SpawnResult {
+                character_id: next_slot.clone(),
+                action: "spawned".to_string(),
+                visible_count,
+            });
+        }
+    }
+
+    let active = {
+        let current = state.active_character_id.lock().unwrap().clone();
+        if current.is_empty() {
+            PRIMARY_CHARACTER_ID.to_string()
+        } else {
+            current
+        }
+    };
+    let ordered = enabled;
+    let idx = ordered.iter().position(|id| id == &active).unwrap_or(0);
+    let next_idx = (idx + 1) % ordered.len();
+    let next_id = ordered[next_idx].clone();
+    ensure_model_ready_for_character(&next_id).await?;
+    show_overlay_for_character(app.clone(), &state, &next_id).await?;
+    Ok(SpawnResult {
+        character_id: next_id,
+        action: "focused".to_string(),
+        visible_count: ordered.len(),
+    })
 }
 
 /// Load saved overlay scale (returns 1.0 if not saved)
@@ -2061,7 +2504,7 @@ fn save_overlay_scale_to_file(scale: f64) -> Result<(), String> {
 async fn resize_overlay(app: AppHandle, scale: f64) -> Result<(), String> {
     let scale = scale.clamp(0.5, 2.0);
 
-    if let Some(window) = app.get_webview_window("overlay") {
+    if let Some(window) = get_active_overlay_window(&app) {
         let width = paths::DEFAULT_OVERLAY_WIDTH * scale;
         let height = paths::DEFAULT_OVERLAY_HEIGHT * scale;
 
@@ -2255,7 +2698,7 @@ async fn take_screenshot(app: AppHandle) -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         // Get display index from overlay window (for multi-monitor support)
-        let display_index = if let Some(window) = app.get_webview_window("overlay") {
+        let display_index = if let Some(window) = get_active_overlay_window(&app) {
             if let Ok(Some(monitor)) = window.current_monitor() {
                 if let Ok(monitors) = window.available_monitors() {
                     monitors
@@ -2296,7 +2739,7 @@ async fn take_screenshot(app: AppHandle) -> Result<String, String> {
         use windows::Win32::UI::WindowsAndMessaging::*;
 
         // Get monitor bounds from overlay window
-        let (left, top, width, height) = if let Some(window) = app.get_webview_window("overlay") {
+        let (left, top, width, height) = if let Some(window) = get_active_overlay_window(&app) {
             if let Ok(Some(monitor)) = window.current_monitor() {
                 let pos = monitor.position();
                 let size = monitor.size();
@@ -2497,7 +2940,7 @@ async fn take_screenshot_base64(app: AppHandle) -> Result<String, String> {
             .as_millis();
         let temp_path = std::env::temp_dir().join(format!("oto_screenshot_{}.jpg", timestamp));
 
-        let display_index = if let Some(window) = app.get_webview_window("overlay") {
+        let display_index = if let Some(window) = get_active_overlay_window(&app) {
             if let Ok(Some(monitor)) = window.current_monitor() {
                 if let Ok(monitors) = window.available_monitors() {
                     monitors
@@ -2544,7 +2987,7 @@ async fn take_screenshot_base64(app: AppHandle) -> Result<String, String> {
         use windows::Win32::Graphics::Gdi::*;
         use windows::Win32::UI::WindowsAndMessaging::*;
 
-        let (left, top, width, height) = if let Some(window) = app.get_webview_window("overlay") {
+        let (left, top, width, height) = if let Some(window) = get_active_overlay_window(&app) {
             if let Ok(Some(monitor)) = window.current_monitor() {
                 let pos = monitor.position();
                 let size = monitor.size();
@@ -2742,7 +3185,7 @@ fn is_debug_mode() -> bool {
 
 #[command]
 async fn open_overlay_devtools(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("overlay") {
+    if let Some(window) = get_active_overlay_window(&app) {
         window.open_devtools();
         Ok(())
     } else {
@@ -2955,6 +3398,14 @@ fn main() {
             // Store toggle item in state for later text updates
             let state = app.state::<AppState>();
             *state.toggle_menu_item.lock().unwrap() = Some(toggle_item.clone());
+            *state.active_character_id.lock().unwrap() = PRIMARY_CHARACTER_ID.to_string();
+            state
+                .overlay_visible
+                .lock()
+                .unwrap()
+                .insert(PRIMARY_CHARACTER_ID.to_string(), false);
+
+            let _ = load_character_slots();
 
             let menu = Menu::with_items(app, &[&toggle_item, &settings_item, &quit_item])?;
 
@@ -2970,11 +3421,14 @@ fn main() {
                         }
                         "chat_history" => {
                             // Show overlay and emit event to open history modal
-                            if let Some(window) = _app.get_webview_window("overlay") {
+                            if let Some(window) = _app.get_webview_window(&overlay_label_for_character(PRIMARY_CHARACTER_ID)) {
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
-                            let _ = _app.emit("show-chat-history", ());
+                            let _ = _app.emit(
+                                "show-chat-history",
+                                json!({ "character_id": PRIMARY_CHARACTER_ID }),
+                            );
                         }
                         "settings" => {
                             // Show main window (for API key entry, etc.)
@@ -3022,6 +3476,7 @@ fn main() {
             #[cfg(not(target_os = "linux"))]
             let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::Space);
             app.global_shortcut().register(shortcut)?;
+            app.global_shortcut().register(Shortcut::new(None, Code::F11))?;
 
             Ok(())
         })
@@ -3057,6 +3512,20 @@ fn main() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
+                    if shortcut.matches(Modifiers::empty(), Code::F11)
+                        && matches!(event.state(), ShortcutState::Pressed)
+                    {
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = spawn_or_focus_next_character(
+                                app_handle.clone(),
+                                app_handle.state::<AppState>(),
+                            )
+                            .await;
+                        });
+                        return;
+                    }
+
                     let is_alt_space_shortcut = shortcut.matches(Modifiers::ALT, Code::Space)
                         || shortcut.matches(Modifiers::SUPER, Code::Space);
                     if !is_alt_space_shortcut {
@@ -3067,26 +3536,43 @@ fn main() {
                         ShortcutState::Pressed => {
                             let is_visible = {
                                 let state = app.state::<AppState>();
-                                let visible = *state.overlay_visible.lock().unwrap();
+                                let visible = *state
+                                    .overlay_visible
+                                    .lock()
+                                    .unwrap()
+                                    .get(PRIMARY_CHARACTER_ID)
+                                    .unwrap_or(&false);
                                 visible
                             };
 
                             if !is_visible {
                                 // State 0 → State 1: Show character only
                                 toggle_overlay_sync(app);
-                                let _ = app.emit("shortcut-show-character", ());
+                                let _ = app.emit(
+                                    "shortcut-show-character",
+                                    json!({ "character_id": PRIMARY_CHARACTER_ID }),
+                                );
                             } else {
                                 // Allow frontend to choose cycle vs hold-to-talk
-                                let _ = app.emit("shortcut-alt-space-pressed", ());
+                                let _ = app.emit(
+                                    "shortcut-alt-space-pressed",
+                                    json!({ "character_id": PRIMARY_CHARACTER_ID }),
+                                );
                                 // Keep existing cycle event for non-focused behavior.
-                                if let Some(window) = app.get_webview_window("overlay") {
+                                if let Some(window) = app.get_webview_window(&overlay_label_for_character(PRIMARY_CHARACTER_ID)) {
                                     let _ = window.set_focus();
                                 }
-                                let _ = app.emit("shortcut-cycle-state", ());
+                                let _ = app.emit(
+                                    "shortcut-cycle-state",
+                                    json!({ "character_id": PRIMARY_CHARACTER_ID }),
+                                );
                             }
                         }
                         ShortcutState::Released => {
-                            let _ = app.emit("shortcut-alt-space-released", ());
+                            let _ = app.emit(
+                                "shortcut-alt-space-released",
+                                json!({ "character_id": PRIMARY_CHARACTER_ID }),
+                            );
                         }
                     }
                 })
@@ -3095,17 +3581,26 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             init_app,
             get_paths,
+            get_paths_for_character,
             read_file_as_text,
             read_file_as_bytes,
             is_initialized,
             get_model_config,
+            get_model_config_for_character,
             change_model,
+            change_model_for_character,
             reset_model,
             load_model_from_folder,
+            get_character_slots,
+            save_character_slot,
             show_overlay,
             hide_overlay,
+            hide_overlay_for_character_cmd,
             toggle_overlay,
             get_overlay_visible,
+            spawn_or_focus_next_character,
+            get_active_character_id,
+            set_active_character_id,
             resize_overlay,
             get_overlay_scale,
             hide_main_window,
@@ -3139,10 +3634,14 @@ fn main() {
             get_dialogue_prompt,
             send_chat_message,
             send_chat_message_stream,
+            send_chat_message_stream_for_character,
             get_chat_history,
+            get_chat_history_for_character,
             clear_chat_history,
+            clear_chat_history_for_character,
             clear_all_data,
             reload_character,
+            reload_character_for_character,
             save_hitbox,
             load_hitbox,
             clear_hitbox,

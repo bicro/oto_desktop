@@ -974,6 +974,12 @@
 
         // Platform-specific placeholder text
         const defaultPlaceholder = isMac ? '⌥ + Space...' : 'Alt + Space...';
+        const CHARACTER_ID = new URLSearchParams(window.location.search).get('character_id') || 'character_1';
+
+        function isEventForThisCharacter(payload) {
+            if (!payload || !payload.character_id) return true;
+            return payload.character_id === CHARACTER_ID;
+        }
 
         function updateTooltips() {
             // Tooltips updated as needed
@@ -1438,11 +1444,11 @@
             try {
                 // Get model config for dynamic model loading
                 frontendLog('info', '[Overlay] Fetching model config...');
-                const config = await invoke('get_model_config');
+                const config = await invoke('get_model_config_for_character', { characterId: CHARACTER_ID });
                 frontendLog('info', '[Overlay] Model config:', config);
 
                 frontendLog('info', '[Overlay] Fetching models path...');
-                const modelsPath = await invoke('get_paths');
+                const modelsPath = await invoke('get_paths_for_character', { characterId: CHARACTER_ID });
                 frontendLog('info', '[Overlay] Models path:', modelsPath);
 
                 const modelPath = `${modelsPath}/${config.folder}`;
@@ -1867,7 +1873,7 @@
                     await invoke('open_overlay_devtools');
                     break;
                 case 'hide':
-                    await invoke('hide_overlay');
+                    await invoke('hide_overlay_for_character_cmd', { characterId: CHARACTER_ID });
                     break;
             }
         });
@@ -2410,7 +2416,7 @@
                 document.body.classList.add('input-hidden');
                 document.body.classList.remove('hover-enabled');  // Disable hover before hiding
                 closeTextbox();
-                invoke('hide_overlay');
+                invoke('hide_overlay_for_character_cmd', { characterId: CHARACTER_ID });
             }
         }
 
@@ -2433,7 +2439,8 @@
         }
 
         // State 0 → State 1: Character just shown
-        listen('shortcut-show-character', () => {
+        listen('shortcut-show-character', (event) => {
+            if (!isEventForThisCharacter(event.payload)) return;
             AppState.shortcutState = 1;
             closeTextbox();
             // Enable hover after delay - prevents flicker if mouse already hovering
@@ -2444,14 +2451,16 @@
         });
 
         // State 1 → State 2 OR State 2 → State 0
-        listen('shortcut-cycle-state', () => {
+        listen('shortcut-cycle-state', (event) => {
+            if (!isEventForThisCharacter(event.payload)) return;
             if (suppressNextShortcutCycle) {
                 return;
             }
             runShortcutCycleState();
         });
 
-        listen('shortcut-alt-space-pressed', () => {
+        listen('shortcut-alt-space-pressed', (event) => {
+            if (!isEventForThisCharacter(event.payload)) return;
             if (!shouldUseShortcutPushToTalk()) {
                 suppressNextShortcutCycle = false;
                 shortcutEligiblePress = false;
@@ -2473,7 +2482,8 @@
             }, SHORTCUT_HOLD_TO_TALK_THRESHOLD_MS);
         });
 
-        listen('shortcut-alt-space-released', () => {
+        listen('shortcut-alt-space-released', (event) => {
+            if (!isEventForThisCharacter(event.payload)) return;
             if (!shortcutEligiblePress) {
                 resetShortcutHoldState();
                 return;
@@ -2499,6 +2509,7 @@
 
         // Sync state on external visibility changes (e.g., tray menu)
         listen('overlay-visibility-changed', (event) => {
+            if (!isEventForThisCharacter(event.payload)) return;
             if (!event.payload.visible) {
                 AppState.shortcutState = 0;
                 document.body.classList.add('input-hidden');
@@ -2783,7 +2794,7 @@
                     AppState.lastEscapeTime = now;
                 } else if (now - AppState.lastEscapeTime < DOUBLE_TAP_THRESHOLD_MS) {
                     // Double escape: hide character
-                    invoke('hide_overlay');
+                    invoke('hide_overlay_for_character_cmd', { characterId: CHARACTER_ID });
                     AppState.lastEscapeTime = 0;
                 } else {
                     AppState.lastEscapeTime = now;
@@ -2840,6 +2851,7 @@
 
                 // Set up stream listeners
                 const unlistenChunk = await listen('chat-stream-chunk', (event) => {
+                    if (!isEventForThisCharacter(event.payload)) return;
                     const { chunk, role } = event.payload;
 
                     if (role === 'character' && contextLevel === 1) {
@@ -2865,6 +2877,7 @@
                 });
 
                 const unlistenDone = await listen('chat-stream-done', async (event) => {
+                    if (!isEventForThisCharacter(event.payload)) return;
                     console.log('[Chat] Stream done:', event.payload);
                     const streamEl = document.getElementById('streaming-message');
                     if (streamEl) {
@@ -2877,6 +2890,7 @@
                 });
 
                 const unlistenError = await listen('chat-stream-error', (event) => {
+                    if (!isEventForThisCharacter(event.payload)) return;
                     console.error('[Chat] Stream error:', event.payload);
                     const el = document.getElementById('streaming-message');
                     if (el) {
@@ -2887,7 +2901,7 @@
 
                 try {
                     // Invoke streaming command (returns when streaming completes)
-                    await invoke('send_chat_message_stream', { message, includeScreenshot: withScreenshot, contextLevel });
+                    await invoke('send_chat_message_stream_for_character', { characterId: CHARACTER_ID, message, includeScreenshot: withScreenshot, contextLevel });
                     console.log('[Chat] Streaming complete for level', contextLevel);
                 } catch (error) {
                     console.error('[Chat] Error:', error);
@@ -2982,7 +2996,7 @@
 
         async function loadChatHistory() {
             try {
-                const history = await invoke('get_chat_history');
+                const history = await invoke('get_chat_history_for_character', { characterId: CHARACTER_ID });
                 historyContent.innerHTML = '';
 
                 if (history.length === 0) {
@@ -3092,7 +3106,8 @@
         };
 
         // Listen for tray menu event to show history
-        listen('show-chat-history', () => {
+        listen('show-chat-history', (event) => {
+            if (!isEventForThisCharacter(event.payload)) return;
             showHistoryModal();
         });
 

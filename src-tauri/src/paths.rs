@@ -41,6 +41,11 @@ pub fn get_db_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join("chat_history.db"))
 }
 
+/// Gets the database file path for a specific character
+pub fn get_db_path_for_character(character_id: &str) -> Result<PathBuf, String> {
+    get_app_data_dir().map(|p| p.join(format!("chat_history_{}.db", character_id)))
+}
+
 /// Gets the API key file path (legacy - use get_llm_config_path instead)
 pub fn get_api_key_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join(".api_key"))
@@ -74,6 +79,16 @@ pub fn get_hitbox_path() -> Result<PathBuf, String> {
 /// Gets the model configuration file path
 pub fn get_model_config_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join(".model_config.json"))
+}
+
+/// Gets the character slots configuration file path
+pub fn get_characters_config_path() -> Result<PathBuf, String> {
+    get_app_data_dir().map(|p| p.join(".characters.json"))
+}
+
+/// Gets the models directory path for a specific character
+pub fn get_models_dir_for_character(character_id: &str) -> Result<PathBuf, String> {
+    get_models_dir().map(|p| p.join(character_id))
 }
 
 /// Gets the overlay scale file path
