@@ -81,6 +81,11 @@ pub fn get_transform_config_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join(".transform_config.json"))
 }
 
+/// Gets the Codex code generation workspace directory
+pub fn get_codex_workspace_dir() -> Result<PathBuf, String> {
+    get_app_data_dir().map(|p| p.join("codex_workspace"))
+}
+
 /// Gets the texture directory path for a specific model
 pub fn get_texture_dir_for_model(
     model_folder: &str,
