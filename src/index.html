@@ -1638,6 +1638,16 @@
             <div class="form-row" id="apiKeySaved" style="display: none;">
                 <span class="saved-indicator">API KEY CONFIGURED</span>
             </div>
+            <div class="form-group" style="margin-top: 12px;">
+                <div class="form-label">OpenAI Transcription</div>
+                <div class="form-row" id="transcriptionApiKeyRow">
+                    <input type="password" id="transcriptionApiKeyInput" placeholder="OpenAI API Key (Whisper)" />
+                    <button class="btn btn-sm" id="saveTranscriptionKeyBtn">Save</button>
+                </div>
+                <div class="form-row" id="transcriptionApiKeySaved" style="display: none;">
+                    <span class="saved-indicator">TRANSCRIPTION KEY CONFIGURED</span>
+                </div>
+            </div>
             <div class="form-group" id="assistantModelGroup" style="margin-top: 12px;">
                 <div class="form-label">Assistant Model</div>
                 <div class="model-search-container">
@@ -1879,6 +1889,10 @@
         const saveKeyBtn = document.getElementById('saveKeyBtn');
         const apiKeyRow = document.getElementById('apiKeyRow');
         const apiKeySaved = document.getElementById('apiKeySaved');
+        const transcriptionApiKeyInput = document.getElementById('transcriptionApiKeyInput');
+        const saveTranscriptionKeyBtn = document.getElementById('saveTranscriptionKeyBtn');
+        const transcriptionApiKeyRow = document.getElementById('transcriptionApiKeyRow');
+        const transcriptionApiKeySaved = document.getElementById('transcriptionApiKeySaved');
         const assistantModelSearch = document.getElementById('assistantModelSearch');
         const assistantModelDropdown = document.getElementById('assistantModelDropdown');
         const rpModelSearch = document.getElementById('rpModelSearch');
@@ -2213,6 +2227,22 @@
             }
         });
 
+        saveTranscriptionKeyBtn.addEventListener('click', async () => {
+            const key = transcriptionApiKeyInput.value.trim();
+            if (!key) {
+                showToast('Please enter an OpenAI transcription key', 'error');
+                return;
+            }
+            try {
+                await invoke('save_openai_transcription_key', { key });
+                transcriptionApiKeyRow.style.display = 'none';
+                transcriptionApiKeySaved.style.display = 'flex';
+                showToast('OpenAI transcription key saved', 'success');
+            } catch (err) {
+                showToast('Failed to save transcription key: ' + err, 'error');
+            }
+        });
+
         // Model section handlers
         const modelTabs = document.querySelectorAll('.model-tab');
         const urlSource = document.getElementById('urlSource');
@@ -2517,6 +2547,9 @@
                 apiKeyRow.style.display = 'flex';
                 apiKeySaved.style.display = 'none';
                 apiKeyInput.value = '';
+                transcriptionApiKeyRow.style.display = 'flex';
+                transcriptionApiKeySaved.style.display = 'none';
+                transcriptionApiKeyInput.value = '';
                 systemPromptInput.value = '';
                 characterPromptInput.value = '';
                 dialoguePromptInput.value = '';
@@ -2593,6 +2626,12 @@
                 if (hasApiKey) {
                     apiKeyRow.style.display = 'none';
                     apiKeySaved.style.display = 'flex';
+                }
+
+                const hasTranscriptionApiKey = await invoke('has_openai_transcription_key');
+                if (hasTranscriptionApiKey) {
+                    transcriptionApiKeyRow.style.display = 'none';
+                    transcriptionApiKeySaved.style.display = 'flex';
                 }
 
                 // Load prompts

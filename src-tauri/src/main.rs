@@ -169,8 +169,12 @@ pub struct LLMConfig {
     #[serde(default = "default_rp_model")]
     pub rp_model: String,
     pub openrouter_api_key: Option<String>,
-    pub openai_api_key: Option<String>,
     #[serde(default)]
+    pub openai_transcription_api_key: Option<String>,
+    // Legacy fields kept for config migration
+    #[serde(skip_serializing, default)]
+    pub openai_api_key: Option<String>,
+    #[serde(skip_serializing, default)]
     pub groq_api_key: Option<String>,
     // Legacy field for migration
     #[serde(skip_serializing, default)]
@@ -191,6 +195,7 @@ impl Default for LLMConfig {
             assistant_model: default_assistant_model(),
             rp_model: default_rp_model(),
             openrouter_api_key: None,
+            openai_transcription_api_key: None,
             openai_api_key: None,
             groq_api_key: None,
             chat_model: None,
@@ -213,6 +218,14 @@ fn load_llm_config() -> Result<LLMConfig, String> {
             }
             // Save migrated config
             let _ = save_llm_config(&config);
+        }
+
+        // Migration: move legacy OpenAI key to dedicated transcription key
+        if config.openai_transcription_api_key.is_none() {
+            if let Some(legacy_openai_key) = config.openai_api_key.take() {
+                config.openai_transcription_api_key = Some(legacy_openai_key);
+                let _ = save_llm_config(&config);
+            }
         }
 
         Ok(config)
@@ -812,38 +825,28 @@ async fn has_api_key() -> Result<bool, String> {
     Ok(config.openrouter_api_key.is_some())
 }
 
-// ============ OpenAI Key Commands (for image editing) ============
+// ============ OpenAI Transcription Key Commands ============
 
 #[command]
-async fn save_openai_key(key: String) -> Result<(), String> {
-    info!("[save_openai_key] Saving OpenAI API key for image editing");
+async fn save_openai_transcription_key(key: String) -> Result<(), String> {
+    info!("[save_openai_transcription_key] Saving OpenAI API key for transcription");
     let mut config = load_llm_config()?;
-    config.openai_api_key = Some(key);
+    config.openai_transcription_api_key = Some(key);
     save_llm_config(&config)?;
-    info!("[save_openai_key] OpenAI API key saved successfully");
+    info!("[save_openai_transcription_key] OpenAI API key saved successfully");
     Ok(())
 }
 
 #[command]
-async fn get_openai_key() -> Result<Option<String>, String> {
-    // First check for built-in key (compile-time embedded)
-    if let Some(builtin_key) = get_builtin_api_key() {
-        return Ok(Some(builtin_key));
-    }
-    // Fall back to user-configured key in LLM config
+async fn get_openai_transcription_key() -> Result<Option<String>, String> {
     let config = load_llm_config()?;
-    Ok(config.openai_api_key)
+    Ok(config.openai_transcription_api_key)
 }
 
 #[command]
-async fn has_openai_key() -> Result<bool, String> {
-    // Check for built-in key first
-    if get_builtin_api_key().is_some() {
-        return Ok(true);
-    }
-    // Fall back to checking LLM config
+async fn has_openai_transcription_key() -> Result<bool, String> {
     let config = load_llm_config()?;
-    Ok(config.openai_api_key.is_some())
+    Ok(config.openai_transcription_api_key.is_some())
 }
 
 // ============ Audio Transcription Commands ============
@@ -853,17 +856,9 @@ async fn transcribe_audio(audio_base64: String) -> Result<String, String> {
     info!("[transcribe_audio] Starting transcription...");
 
     let config = load_llm_config()?;
-
-    // Try Groq first (free, fast), then OpenAI
-    let (api_key, api_url, model) = if let Some(ref groq_key) = config.groq_api_key {
-        // Groq is free and very fast for Whisper
-        (groq_key.clone(), "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3")
-    } else if let Some(ref openai_key) = config.openai_api_key {
-        // Use OpenAI if configured
-        (openai_key.clone(), "https://api.openai.com/v1/audio/transcriptions", "whisper-1")
-    } else {
-        return Err("Voice transcription requires a Groq or OpenAI API key. Get a free Groq key at console.groq.com".to_string());
-    };
+    let api_key = config
+        .openai_transcription_api_key
+        .ok_or_else(|| "Voice transcription requires an OpenAI API key in Settings > API.".to_string())?;
 
     // Decode base64 to bytes
     let audio_bytes = base64::Engine::decode(
@@ -871,7 +866,10 @@ async fn transcribe_audio(audio_base64: String) -> Result<String, String> {
         &audio_base64
     ).map_err(|e| format!("Failed to decode audio: {}", e))?;
 
-    info!("[transcribe_audio] Audio size: {} bytes, using {}", audio_bytes.len(), api_url);
+    info!(
+        "[transcribe_audio] Audio size: {} bytes, using OpenAI Whisper",
+        audio_bytes.len()
+    );
 
     // Create multipart form
     let part = reqwest::multipart::Part::bytes(audio_bytes)
@@ -881,11 +879,11 @@ async fn transcribe_audio(audio_base64: String) -> Result<String, String> {
 
     let form = reqwest::multipart::Form::new()
         .part("file", part)
-        .text("model", model);
+        .text("model", "whisper-1");
 
     let client = reqwest::Client::new();
     let response = client
-        .post(api_url)
+        .post("https://api.openai.com/v1/audio/transcriptions")
         .header("Authorization", format!("Bearer {}", api_key))
         .multipart(form)
         .send()
@@ -3107,9 +3105,9 @@ fn main() {
             save_api_key,
             get_api_key,
             has_api_key,
-            save_openai_key,
-            get_openai_key,
-            has_openai_key,
+            save_openai_transcription_key,
+            get_openai_transcription_key,
+            has_openai_transcription_key,
             transcribe_audio,
             get_llm_config_cmd,
             set_model,
