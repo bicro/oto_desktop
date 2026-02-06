@@ -18,6 +18,7 @@ lib/*.dll
 
 # User data (contains API keys)
 .api_key
+.llm_config.json
 
 # IDE
 .vscode/
@@ -37,10 +38,14 @@ npm-debug.log*
 src-tauri/target/
 src-tauri/WixTools/
 src-tauri/gen/
+src-tauri/resources/oto-hotkey-helper
 
 # Debug
 debug/
 *.pdb
+
+# Local clones
+_flow_audio_v2/
 
 # Beta build artifacts
 beta_builds/

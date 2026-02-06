@@ -37,6 +37,10 @@ use serde::Deserialize;
 use objc2::rc::Retained;
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+#[cfg(target_os = "macos")]
+use std::io::{BufRead, BufReader};
+#[cfg(target_os = "macos")]
+use std::process::{Child, ChildStdin, Command, Stdio};
 
 // Windows-specific imports
 #[cfg(target_os = "windows")]
@@ -758,8 +762,7 @@ async fn save_api_key(key: String) -> Result<(), String> {
 
 /// XOR key for deobfuscation (must match build.rs)
 const XOR_KEY: [u8; 16] = [
-    0x4f, 0x72, 0x61, 0x6e, 0x67, 0x65, 0x50, 0x69,
-    0x6e, 0x65, 0x61, 0x70, 0x70, 0x6c, 0x65, 0x21,
+    0x4f, 0x72, 0x61, 0x6e, 0x67, 0x65, 0x50, 0x69, 0x6e, 0x65, 0x61, 0x70, 0x70, 0x6c, 0x65, 0x21,
 ];
 
 /// Compile-time embedded obfuscated API key (hex-encoded)
@@ -856,15 +859,14 @@ async fn transcribe_audio(audio_base64: String) -> Result<String, String> {
     info!("[transcribe_audio] Starting transcription...");
 
     let config = load_llm_config()?;
-    let api_key = config
-        .openai_transcription_api_key
-        .ok_or_else(|| "Voice transcription requires an OpenAI API key in Settings > API.".to_string())?;
+    let api_key = config.openai_transcription_api_key.ok_or_else(|| {
+        "Voice transcription requires an OpenAI API key in Settings > API.".to_string()
+    })?;
 
     // Decode base64 to bytes
-    let audio_bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        &audio_base64
-    ).map_err(|e| format!("Failed to decode audio: {}", e))?;
+    let audio_bytes =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &audio_base64)
+            .map_err(|e| format!("Failed to decode audio: {}", e))?;
 
     info!(
         "[transcribe_audio] Audio size: {} bytes, using OpenAI Whisper",
@@ -891,7 +893,10 @@ async fn transcribe_audio(audio_base64: String) -> Result<String, String> {
         .map_err(|e| format!("Transcription request failed: {}", e))?;
 
     let status = response.status();
-    let body = response.text().await.map_err(|e| format!("Failed to read response: {}", e))?;
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
 
     if !status.is_success() {
         error!("[transcribe_audio] API error: {} - {}", status, body);
@@ -899,15 +904,19 @@ async fn transcribe_audio(audio_base64: String) -> Result<String, String> {
     }
 
     // Parse response - OpenAI whisper returns { "text": "..." }
-    let json: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("Failed to parse response: {}", e))?;
 
-    let text = json.get("text")
+    let text = json
+        .get("text")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
 
-    info!("[transcribe_audio] Transcription complete: {} chars", text.len());
+    info!(
+        "[transcribe_audio] Transcription complete: {} chars",
+        text.len()
+    );
     Ok(text)
 }
 
@@ -1296,7 +1305,10 @@ fn emit_stream_chunk(app: &AppHandle, text: &str, context_level: u8) {
     );
 }
 
-fn apply_codex_files(workspace_dir: &Path, files: &[CodexGeneratedFile]) -> Result<Vec<String>, String> {
+fn apply_codex_files(
+    workspace_dir: &Path,
+    files: &[CodexGeneratedFile],
+) -> Result<Vec<String>, String> {
     let mut touched_files = Vec::new();
 
     for file in files {
@@ -1361,13 +1373,12 @@ async fn generate_codex_workspace_result(
         .as_str()
         .ok_or_else(|| "Codex API returned empty content".to_string())?;
 
-    serde_json::from_str::<CodexGenerationResponse>(content)
-        .or_else(|_| {
-            let maybe_json = extract_json_object(content)
-                .ok_or_else(|| "Codex response did not contain valid JSON".to_string())?;
-            serde_json::from_str::<CodexGenerationResponse>(&maybe_json)
-                .map_err(|e| format!("Failed to parse Codex JSON: {}", e))
-        })
+    serde_json::from_str::<CodexGenerationResponse>(content).or_else(|_| {
+        let maybe_json = extract_json_object(content)
+            .ok_or_else(|| "Codex response did not contain valid JSON".to_string())?;
+        serde_json::from_str::<CodexGenerationResponse>(&maybe_json)
+            .map_err(|e| format!("Failed to parse Codex JSON: {}", e))
+    })
 }
 
 #[command]
@@ -1392,7 +1403,8 @@ async fn send_chat_message(
         std::fs::create_dir_all(&workspace_dir)
             .map_err(|e| format!("Failed to create Codex workspace session: {}", e))?;
 
-        let codex_result = generate_codex_workspace_result(&api_key, &message, &workspace_dir).await?;
+        let codex_result =
+            generate_codex_workspace_result(&api_key, &message, &workspace_dir).await?;
         let touched_files = apply_codex_files(&workspace_dir, &codex_result.files)?;
 
         let timestamp = chrono::Utc::now().to_rfc3339();
@@ -1579,7 +1591,8 @@ async fn send_chat_message_stream(
         );
         emit_stream_chunk(&app, "Generating code with Codex...\n", context_level);
 
-        let codex_result = generate_codex_workspace_result(&api_key, &message, &workspace_dir).await?;
+        let codex_result =
+            generate_codex_workspace_result(&api_key, &message, &workspace_dir).await?;
 
         emit_stream_chunk(&app, "Writing files...\n", context_level);
         let touched_files = apply_codex_files(&workspace_dir, &codex_result.files)?;
@@ -1859,9 +1872,179 @@ async fn reload_character(
 pub struct AppState {
     pub overlay_visible: Mutex<bool>,
     pub toggle_menu_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    #[cfg(target_os = "macos")]
+    pub(crate) hotkey_helper: Mutex<Option<HotkeyHelper>>,
 }
 
 // ============ Overlay Window Commands ============
+
+#[cfg(target_os = "macos")]
+struct HotkeyHelper {
+    child: Child,
+    stdin: ChildStdin,
+}
+
+#[cfg(target_os = "macos")]
+impl HotkeyHelper {
+    #[allow(dead_code)]
+    fn send_command(&mut self, value: &Value) -> Result<(), String> {
+        let mut json = serde_json::to_string(value)
+            .map_err(|e| format!("Failed to serialize hotkey command: {}", e))?;
+        json.push('\n');
+        self.stdin
+            .write_all(json.as_bytes())
+            .map_err(|e| format!("Failed to write to hotkey helper: {}", e))?;
+        self.stdin
+            .flush()
+            .map_err(|e| format!("Failed to flush hotkey helper stdin: {}", e))?;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn find_hotkey_helper_path(app: &AppHandle) -> Option<PathBuf> {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let candidate = resource_dir.join("oto-hotkey-helper");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let candidate = parent.join("oto-hotkey-helper");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    let dev_candidate = PathBuf::from("src-tauri/resources/oto-hotkey-helper");
+    if dev_candidate.exists() {
+        return Some(dev_candidate);
+    }
+
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn handle_hotkey_helper_line(app: &AppHandle, line: &str) {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        warn!("[hotkey-helper] Invalid JSON: {}", line);
+        return;
+    };
+
+    let event = value.get("event").and_then(|v| v.as_str()).unwrap_or("");
+
+    match event {
+        "ready" => info!("[hotkey-helper] Ready"),
+        "error" => {
+            let message = value
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error");
+            warn!("[hotkey-helper] Error: {}", message);
+        }
+        "hotkey" => {
+            let trigger = value.get("trigger").and_then(|v| v.as_str()).unwrap_or("");
+            match trigger {
+                "pressed" | "toggle" => handle_activation(app),
+                "released" => {}
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn start_hotkey_helper(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    {
+        let mut guard = state.hotkey_helper.lock().unwrap();
+        if let Some(helper) = guard.as_mut() {
+            if let Ok(None) = helper.child.try_wait() {
+                return Ok(());
+            }
+            *guard = None;
+        }
+    }
+
+    let helper_path = find_hotkey_helper_path(app).ok_or("Hotkey helper binary not found")?;
+
+    info!(
+        "[hotkey-helper] Starting helper at {}",
+        helper_path.display()
+    );
+
+    let mut child = Command::new(&helper_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start hotkey helper: {}", e))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("Failed to capture hotkey helper stdout")?;
+    let stderr = child.stderr.take();
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or("Failed to capture hotkey helper stdin")?;
+
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            match line {
+                Ok(line) => handle_hotkey_helper_line(&app_handle, &line),
+                Err(err) => {
+                    warn!("[hotkey-helper] Failed reading stdout: {}", err);
+                    break;
+                }
+            }
+        }
+        warn!("[hotkey-helper] Helper stdout closed");
+    });
+
+    if let Some(stderr) = stderr {
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    warn!("[hotkey-helper] {}", line);
+                }
+            }
+        });
+    }
+
+    let mut guard = state.hotkey_helper.lock().unwrap();
+    *guard = Some(HotkeyHelper { child, stdin });
+
+    Ok(())
+}
+
+fn handle_activation(app: &AppHandle) {
+    let is_visible = {
+        let state = app.state::<AppState>();
+        let visible = *state.overlay_visible.lock().unwrap();
+        visible
+    };
+
+    if !is_visible {
+        // State 0 → State 1: Show character only
+        toggle_overlay_sync(app);
+        let _ = app.emit("shortcut-show-character", ());
+    } else {
+        // State 1 or 2: Let frontend cycle
+        if let Some(window) = app.get_webview_window("overlay") {
+            let _ = window.set_focus();
+        }
+        let _ = app.emit("shortcut-cycle-state", ());
+    }
+}
 
 #[cfg(target_os = "macos")]
 fn configure_overlay(window: &tauri::WebviewWindow) -> Result<(), String> {
@@ -2692,7 +2875,9 @@ async fn open_screenshots_folder() -> Result<(), String> {
 
 #[command]
 async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
-    let log_dir = app.path().app_log_dir()
+    let log_dir = app
+        .path()
+        .app_log_dir()
         .map_err(|e| format!("Failed to get log directory: {}", e))?;
 
     // Create directory if it doesn't exist
@@ -2938,6 +3123,13 @@ fn main() {
                 );
             }
 
+            #[cfg(target_os = "macos")]
+            {
+                if let Err(err) = start_hotkey_helper(&app.handle()) {
+                    warn!("[hotkey-helper] Failed to start: {}", err);
+                }
+            }
+
             // Create tray menu
             let toggle_item =
                 MenuItem::with_id(app, "toggle", "Show Character", true, None::<&str>)?;
@@ -3053,23 +3245,7 @@ fn main() {
                         && (shortcut.matches(Modifiers::ALT, Code::Space)
                             || shortcut.matches(Modifiers::SUPER, Code::Space))
                     {
-                        let is_visible = {
-                            let state = app.state::<AppState>();
-                            let visible = *state.overlay_visible.lock().unwrap();
-                            visible
-                        };
-
-                        if !is_visible {
-                            // State 0 → State 1: Show character only
-                            toggle_overlay_sync(app);
-                            let _ = app.emit("shortcut-show-character", ());
-                        } else {
-                            // State 1 or 2: Let frontend cycle
-                            if let Some(window) = app.get_webview_window("overlay") {
-                                let _ = window.set_focus();
-                            }
-                            let _ = app.emit("shortcut-cycle-state", ());
-                        }
+                        handle_activation(app);
                     }
                 })
                 .build(),

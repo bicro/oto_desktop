@@ -59,6 +59,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [
+      "resources/oto-hotkey-helper"
+    ],
     "macOS": {
       "signingIdentity": null,
       "hardenedRuntime": true,
