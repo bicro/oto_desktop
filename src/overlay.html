@@ -46,6 +46,12 @@
             cursor: grabbing;
         }
 
+        body.inactive-overlay {
+            opacity: 0.62;
+            filter: blur(1.2px) saturate(0.9);
+            transition: opacity 160ms ease, filter 160ms ease;
+        }
+
         #live2dCanvas {
             display: block;
             pointer-events: none;
@@ -979,6 +985,19 @@
         function isEventForThisCharacter(payload) {
             if (!payload || !payload.character_id) return true;
             return payload.character_id === CHARACTER_ID;
+        }
+
+        function applyActiveOverlayState(activeCharacterId) {
+            const isActive = !activeCharacterId || activeCharacterId === CHARACTER_ID;
+            document.body.classList.toggle('inactive-overlay', !isActive);
+        }
+
+        async function markThisOverlayActive() {
+            try {
+                await invoke('set_active_character_id', { characterId: CHARACTER_ID });
+            } catch (e) {
+                // best-effort
+            }
         }
 
         function updateTooltips() {
@@ -2527,6 +2546,11 @@
             }
         });
 
+        listen('active-character-changed', (event) => {
+            const activeCharacterId = event?.payload?.character_id || null;
+            applyActiveOverlayState(activeCharacterId);
+        });
+
         function escapeHtml(text) {
             return String(text)
                 .replace(/&/g, '&amp;')
@@ -2963,10 +2987,15 @@
 
         // Click outside to blur input
         document.addEventListener('click', (e) => {
+            markThisOverlayActive();
             if (!chatPanel.contains(e.target) &&
                 document.activeElement === chatInput) {
                 closeTextbox();
             }
+        });
+
+        chatInput.addEventListener('focus', () => {
+            markThisOverlayActive();
         });
 
         // ============ Chat History ============
@@ -3240,6 +3269,12 @@
             updateTooltips();
             resizeHitboxCanvas();
             initDebugMenu();
+            try {
+                const activeCharacterId = await invoke('get_active_character_id');
+                applyActiveOverlayState(activeCharacterId);
+            } catch (e) {
+                applyActiveOverlayState('character_1');
+            }
 
             // Check if model is already downloaded before attempting to load
             // On first launch, model may not exist yet - init-complete will trigger load later

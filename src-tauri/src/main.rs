@@ -200,7 +200,17 @@ fn save_model_config_for_character(character_id: &str, config: &ModelConfig) -> 
 
 const CHARACTER_IDS: [&str; 3] = ["character_1", "character_2", "character_3"];
 const PRIMARY_CHARACTER_ID: &str = "character_1";
-const MAX_CHARACTER_OVERLAYS: usize = 3;
+const SLOT_1_MODEL_URL: &str = "https://storage.googleapis.com/oto_bucket/live2d/Hiyori.zip";
+const SLOT_2_MODEL_URL: &str = "https://storage.googleapis.com/oto_bucket/live2d/cat3.zip";
+const SLOT_3_MODEL_URL: &str = "https://storage.googleapis.com/oto_bucket/live2d/steve.zip";
+
+fn slot_default_url(slot_id: &str) -> &'static str {
+    match slot_id {
+        "character_2" => SLOT_2_MODEL_URL,
+        "character_3" => SLOT_3_MODEL_URL,
+        _ => SLOT_1_MODEL_URL,
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CharacterSlotConfig {
@@ -218,27 +228,24 @@ pub struct CharacterSlotConfig {
 impl CharacterSlotConfig {
     fn default_with_id(slot_id: &str) -> Self {
         let default = ModelConfig::default();
-        let is_primary = slot_id == PRIMARY_CHARACTER_ID;
+        let default_url = slot_default_url(slot_id).to_string();
         Self {
             slot_id: slot_id.to_string(),
-            model_url: if is_primary {
-                default.url
-            } else {
-                String::new()
-            },
-            enabled: is_primary,
-            folder: if is_primary { Some(default.folder) } else { None },
-            model_file: if is_primary {
-                Some(default.model_file)
-            } else {
-                None
-            },
-            texture_folder: if is_primary {
-                default.texture_folder
-            } else {
-                None
-            },
+            model_url: default_url,
+            enabled: true,
+            folder: if slot_id == PRIMARY_CHARACTER_ID { Some(default.folder) } else { None },
+            model_file: if slot_id == PRIMARY_CHARACTER_ID { Some(default.model_file) } else { None },
+            texture_folder: if slot_id == PRIMARY_CHARACTER_ID { default.texture_folder } else { None },
         }
+    }
+}
+
+fn apply_slot_url_defaults(slots: &mut [CharacterSlotConfig]) {
+    for slot in slots.iter_mut() {
+        if slot.model_url.trim().is_empty() {
+            slot.model_url = slot_default_url(&slot.slot_id).to_string();
+        }
+        slot.enabled = true;
     }
 }
 
@@ -261,7 +268,10 @@ fn load_character_slots() -> Result<Vec<CharacterSlotConfig>, String> {
             .map_err(|e| format!("Failed to read characters config: {}", e))?;
         let parsed: Vec<CharacterSlotConfig> = serde_json::from_str(&content)
             .map_err(|e| format!("Failed to parse characters config: {}", e))?;
-        Ok(merge_character_slots(parsed))
+        let mut merged = merge_character_slots(parsed);
+        apply_slot_url_defaults(&mut merged);
+        save_character_slots(&merged)?;
+        Ok(merged)
     } else {
         let slots = migrate_or_default_character_slots()?;
         save_character_slots(&slots)?;
@@ -296,6 +306,7 @@ fn migrate_or_default_character_slots() -> Result<Vec<CharacterSlotConfig>, Stri
             }
         }
     }
+    apply_slot_url_defaults(&mut slots);
     Ok(slots)
 }
 
@@ -2087,12 +2098,8 @@ fn configure_overlay(_window: &tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
-fn character_cascade_offset(character_id: &str) -> i32 {
-    match character_id {
-        "character_2" => 36,
-        "character_3" => 72,
-        _ => 0,
-    }
+fn character_cascade_offset(_character_id: &str) -> i32 {
+    0
 }
 
 fn ensure_overlay_window(app: &AppHandle, character_id: &str) -> Result<tauri::WebviewWindow, String> {
@@ -2164,6 +2171,22 @@ async fn show_overlay_for_character(
     state: &tauri::State<'_, AppState>,
     character_id: &str,
 ) -> Result<(), String> {
+    // Single-visible mode: hide all other character overlays first.
+    for other_id in CHARACTER_IDS {
+        if other_id == character_id {
+            continue;
+        }
+        let other_label = overlay_label_for_character(other_id);
+        if let Some(other_window) = app.get_webview_window(&other_label) {
+            let _ = other_window.hide();
+        }
+        set_overlay_visible_for_character(state, other_id, false);
+        let _ = app.emit(
+            "overlay-visibility-changed",
+            json!({ "visible": false, "character_id": other_id }),
+        );
+    }
+
     let window = ensure_overlay_window(&app, character_id)?;
     configure_overlay(&window)?;
 
@@ -2173,7 +2196,7 @@ async fn show_overlay_for_character(
         if let Ok(window_size) = window.outer_size() {
             let offset = character_cascade_offset(character_id);
             let x = screen_pos.x + (screen_size.width as i32) - (window_size.width as i32) - offset;
-            let y = screen_pos.y + (screen_size.height as i32) - (window_size.height as i32) - offset;
+            let y = screen_pos.y + (screen_size.height as i32) - (window_size.height as i32);
             let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
         }
     }
@@ -2183,6 +2206,10 @@ async fn show_overlay_for_character(
 
     set_overlay_visible_for_character(&state, character_id, true);
     *state.active_character_id.lock().unwrap() = character_id.to_string();
+    let _ = app.emit(
+        "active-character-changed",
+        json!({ "character_id": character_id }),
+    );
 
     if character_id == PRIMARY_CHARACTER_ID {
         if let Some(menu_item) = state.toggle_menu_item.lock().unwrap().as_ref() {
@@ -2319,6 +2346,68 @@ fn toggle_overlay_sync(app: &AppHandle) {
     }
 }
 
+fn show_overlay_for_character_sync(app: &AppHandle, character_id: &str) -> Result<(), String> {
+    if !is_valid_character_id(character_id) {
+        return Err("Invalid character id".to_string());
+    }
+
+    // Single-visible mode: hide all other overlays first.
+    let state = app.state::<AppState>();
+    for other_id in CHARACTER_IDS {
+        if other_id == character_id {
+            continue;
+        }
+        let other_label = overlay_label_for_character(other_id);
+        if let Some(other_window) = app.get_webview_window(&other_label) {
+            let _ = other_window.hide();
+        }
+        state
+            .overlay_visible
+            .lock()
+            .unwrap()
+            .insert(other_id.to_string(), false);
+        let _ = app.emit(
+            "overlay-visibility-changed",
+            json!({ "visible": false, "character_id": other_id }),
+        );
+    }
+
+    let window = ensure_overlay_window(app, character_id)?;
+    configure_overlay(&window)?;
+
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let screen_size = monitor.size();
+        let screen_pos = monitor.position();
+        if let Ok(window_size) = window.outer_size() {
+            let offset = character_cascade_offset(character_id);
+            let x = screen_pos.x + (screen_size.width as i32) - (window_size.width as i32) - offset;
+            let y = screen_pos.y + (screen_size.height as i32) - (window_size.height as i32);
+            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+        }
+    }
+
+    let _ = window.show();
+    let _ = window.set_focus();
+
+    let state = app.state::<AppState>();
+    state
+        .overlay_visible
+        .lock()
+        .unwrap()
+        .insert(character_id.to_string(), true);
+    *state.active_character_id.lock().unwrap() = character_id.to_string();
+    let _ = app.emit(
+        "active-character-changed",
+        json!({ "character_id": character_id }),
+    );
+
+    let _ = app.emit(
+        "overlay-visibility-changed",
+        json!({ "visible": true, "character_id": character_id }),
+    );
+    Ok(())
+}
+
 #[command]
 async fn get_overlay_visible(state: tauri::State<'_, AppState>) -> Result<bool, String> {
     Ok(get_overlay_visible_for_character(&state, PRIMARY_CHARACTER_ID))
@@ -2411,6 +2500,10 @@ async fn set_active_character_id(
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.set_focus();
     }
+    let _ = app.emit(
+        "active-character-changed",
+        json!({ "character_id": character_id }),
+    );
     Ok(())
 }
 
@@ -2419,14 +2512,49 @@ async fn spawn_or_focus_next_character(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<SpawnResult, String> {
-    let slots = load_character_slots()?;
-    let enabled: Vec<String> = slots
+    let mut slots = load_character_slots()?;
+    let mut enabled: Vec<String> = slots
         .iter()
         .filter(|s| s.enabled && !s.model_url.trim().is_empty())
         .map(|s| s.slot_id.clone())
         .collect();
+    info!("[shortcut:f12] enabled character slots: {:?}", enabled);
+
+    // UX fallback: if only primary is configured, auto-provision character_2
+    // with the same model URL so F12 visibly spawns another overlay.
+    if enabled.len() == 1 && enabled[0] == PRIMARY_CHARACTER_ID {
+        let primary_url = slots
+            .iter()
+            .find(|s| s.slot_id == PRIMARY_CHARACTER_ID)
+            .map(|s| s.model_url.trim().to_string())
+            .unwrap_or_else(|| DEFAULT_MODEL_URL.to_string());
+
+        if let Some(slot2) = slots.iter_mut().find(|s| s.slot_id == "character_2") {
+            if !slot2.enabled || slot2.model_url.trim().is_empty() {
+                slot2.enabled = true;
+                slot2.model_url = if primary_url.is_empty() {
+                    DEFAULT_MODEL_URL.to_string()
+                } else {
+                    primary_url
+                };
+                slot2.folder = None;
+                slot2.model_file = None;
+                slot2.texture_folder = None;
+                save_character_slots(&slots)?;
+                info!("[shortcut:f12] auto-provisioned character_2 for first multi-spawn");
+            }
+        }
+
+        enabled = slots
+            .iter()
+            .filter(|s| s.enabled && !s.model_url.trim().is_empty())
+            .map(|s| s.slot_id.clone())
+            .collect();
+        info!("[shortcut:f12] enabled slots after auto-provision: {:?}", enabled);
+    }
 
     if enabled.is_empty() {
+        warn!("[shortcut:f12] spawn aborted: no enabled character slots configured");
         return Err("No enabled character slots configured".to_string());
     }
 
@@ -2436,25 +2564,7 @@ async fn spawn_or_focus_next_character(
         .cloned()
         .collect();
     visible_ids.sort();
-
-    if visible_ids.len() < MAX_CHARACTER_OVERLAYS {
-        if let Some(next_slot) = enabled
-            .iter()
-            .find(|id| !get_overlay_visible_for_character(&state, id))
-        {
-            ensure_model_ready_for_character(next_slot).await?;
-            show_overlay_for_character(app.clone(), &state, next_slot).await?;
-            let visible_count = enabled
-                .iter()
-                .filter(|id| get_overlay_visible_for_character(&state, id))
-                .count();
-            return Ok(SpawnResult {
-                character_id: next_slot.clone(),
-                action: "spawned".to_string(),
-                visible_count,
-            });
-        }
-    }
+    info!("[shortcut:f12] visible character overlays: {:?}", visible_ids);
 
     let active = {
         let current = state.active_character_id.lock().unwrap().clone();
@@ -2465,15 +2575,28 @@ async fn spawn_or_focus_next_character(
         }
     };
     let ordered = enabled;
-    let idx = ordered.iter().position(|id| id == &active).unwrap_or(0);
-    let next_idx = (idx + 1) % ordered.len();
+    let next_idx = if ordered.len() == 1 {
+        0
+    } else {
+        let idx = ordered.iter().position(|id| id == &active).unwrap_or(0);
+        (idx + 1) % ordered.len()
+    };
     let next_id = ordered[next_idx].clone();
+    info!(
+        "[shortcut:f12] single-visible cycle from {} to {}",
+        active, next_id
+    );
     ensure_model_ready_for_character(&next_id).await?;
     show_overlay_for_character(app.clone(), &state, &next_id).await?;
+    info!(
+        "[shortcut:f12] focus success: character_id={} visible_count={}",
+        next_id,
+        ordered.len()
+    );
     Ok(SpawnResult {
         character_id: next_id,
         action: "focused".to_string(),
-        visible_count: ordered.len(),
+        visible_count: 1,
     })
 }
 
@@ -3475,8 +3598,17 @@ fn main() {
             let shortcut = Shortcut::new(Some(Modifiers::SUPER), Code::Space);
             #[cfg(not(target_os = "linux"))]
             let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::Space);
-            app.global_shortcut().register(shortcut)?;
-            app.global_shortcut().register(Shortcut::new(None, Code::F11))?;
+            if let Err(e) = app.global_shortcut().register(shortcut) {
+                error!("[shortcut] failed to register Alt/Super+Space: {}", e);
+                return Err(e.into());
+            }
+            info!("[shortcut] registered Alt/Super+Space successfully");
+
+            if let Err(e) = app.global_shortcut().register(Shortcut::new(None, Code::F12)) {
+                error!("[shortcut] failed to register F12: {}", e);
+                return Err(e.into());
+            }
+            info!("[shortcut] registered F12 successfully");
 
             Ok(())
         })
@@ -3512,16 +3644,30 @@ fn main() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    if shortcut.matches(Modifiers::empty(), Code::F11)
+                    info!(
+                        "[shortcut] callback key={:?} modifiers={:?} state={:?}",
+                        shortcut,
+                        shortcut.mods,
+                        event.state()
+                    );
+                    if shortcut.matches(Modifiers::empty(), Code::F12)
                         && matches!(event.state(), ShortcutState::Pressed)
                     {
+                        info!("[shortcut:f12] pressed; attempting spawn/focus");
                         let app_handle = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            let _ = spawn_or_focus_next_character(
+                            match spawn_or_focus_next_character(
                                 app_handle.clone(),
                                 app_handle.state::<AppState>(),
                             )
-                            .await;
+                            .await
+                            {
+                                Ok(result) => info!(
+                                    "[shortcut:f12] handler success action={} character_id={} visible_count={}",
+                                    result.action, result.character_id, result.visible_count
+                                ),
+                                Err(err) => error!("[shortcut:f12] handler error: {}", err),
+                            }
                         });
                         return;
                     }
@@ -3529,49 +3675,54 @@ fn main() {
                     let is_alt_space_shortcut = shortcut.matches(Modifiers::ALT, Code::Space)
                         || shortcut.matches(Modifiers::SUPER, Code::Space);
                     if !is_alt_space_shortcut {
+                        info!("[shortcut] ignored non-target shortcut event");
                         return;
                     }
 
                     match event.state() {
                         ShortcutState::Pressed => {
+                            let active_character_id = get_active_character_id_from_app(app);
                             let is_visible = {
                                 let state = app.state::<AppState>();
                                 let visible = *state
                                     .overlay_visible
                                     .lock()
                                     .unwrap()
-                                    .get(PRIMARY_CHARACTER_ID)
+                                    .get(&active_character_id)
                                     .unwrap_or(&false);
                                 visible
                             };
 
                             if !is_visible {
                                 // State 0 → State 1: Show character only
-                                toggle_overlay_sync(app);
+                                let _ = show_overlay_for_character_sync(app, &active_character_id);
                                 let _ = app.emit(
                                     "shortcut-show-character",
-                                    json!({ "character_id": PRIMARY_CHARACTER_ID }),
+                                    json!({ "character_id": active_character_id }),
                                 );
                             } else {
                                 // Allow frontend to choose cycle vs hold-to-talk
                                 let _ = app.emit(
                                     "shortcut-alt-space-pressed",
-                                    json!({ "character_id": PRIMARY_CHARACTER_ID }),
+                                    json!({ "character_id": active_character_id }),
                                 );
                                 // Keep existing cycle event for non-focused behavior.
-                                if let Some(window) = app.get_webview_window(&overlay_label_for_character(PRIMARY_CHARACTER_ID)) {
+                                if let Some(window) =
+                                    app.get_webview_window(&overlay_label_for_character(&active_character_id))
+                                {
                                     let _ = window.set_focus();
                                 }
                                 let _ = app.emit(
                                     "shortcut-cycle-state",
-                                    json!({ "character_id": PRIMARY_CHARACTER_ID }),
+                                    json!({ "character_id": active_character_id }),
                                 );
                             }
                         }
                         ShortcutState::Released => {
+                            let active_character_id = get_active_character_id_from_app(app);
                             let _ = app.emit(
                                 "shortcut-alt-space-released",
-                                json!({ "character_id": PRIMARY_CHARACTER_ID }),
+                                json!({ "character_id": active_character_id }),
                             );
                         }
                     }

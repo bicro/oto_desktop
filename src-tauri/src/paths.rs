@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 /// URL for downloading the default Live2D model
-pub const DEFAULT_MODEL_URL: &str = "https://storage.googleapis.com/oto_bucket/live2d/Hiyori1.zip";
+pub const DEFAULT_MODEL_URL: &str = "https://storage.googleapis.com/oto_bucket/live2d/Hiyori.zip";
 
 /// Default overlay window dimensions
 pub const DEFAULT_OVERLAY_WIDTH: f64 = 400.0;
