@@ -5,8 +5,8 @@ fn main() {
         0x6e, 0x65, 0x61, 0x70, 0x70, 0x6c, 0x65, 0x21,
     ];
 
-    // Check if OPENAI_API_KEY environment variable is set at build time
-    if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
+    // Check if OPENROUTER_API_KEY environment variable is set at build time
+    if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") {
         if !api_key.is_empty() {
             // XOR obfuscate the key
             let obfuscated: Vec<u8> = api_key
@@ -33,8 +33,8 @@ fn main() {
         println!("cargo:rustc-env=HAS_BUILTIN_KEY=0");
     }
 
-    // Re-run build script if OPENAI_API_KEY changes
-    println!("cargo:rerun-if-env-changed=OPENAI_API_KEY");
+    // Re-run build script if OPENROUTER_API_KEY changes
+    println!("cargo:rerun-if-env-changed=OPENROUTER_API_KEY");
 
     tauri_build::build()
 }

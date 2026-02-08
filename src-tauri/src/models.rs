@@ -18,11 +18,3 @@ pub struct ChatResponse {
     pub main_response: String,
     pub character_comments: Option<Vec<String>>,
 }
-
-/// Version information for a saved texture
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TextureVersion {
-    pub id: String,
-    pub created_at: String,
-    pub prompt: Option<String>,
-}

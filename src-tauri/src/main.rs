@@ -9,7 +9,7 @@ mod prompts;
 
 // Re-exports for internal use
 use db::{clear_chat_history_internal, get_chat_history_internal, store_chat_message};
-use models::{ChatMessage, ChatResponse, TextureVersion};
+use models::{ChatMessage, ChatResponse};
 use paths::*;
 use prompts::*;
 
@@ -25,6 +25,7 @@ use tauri::http::Response;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder};
 use tauri::{command, AppHandle, Emitter, Manager};
+use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 // rusqlite is now used in db.rs module
 use futures_util::StreamExt;
@@ -39,11 +40,14 @@ use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
 
 // Windows-specific imports
 #[cfg(target_os = "windows")]
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    WM_NCACTIVATE, WM_NCPAINT, WM_NCCALCSIZE, WM_NCDESTROY,
 };
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 
 // Path helper functions are in paths.rs module
 
@@ -159,6 +163,75 @@ fn save_model_config(config: &ModelConfig) -> Result<(), String> {
     std::fs::write(&config_path, content).map_err(|e| format!("Failed to save model config: {}", e))
 }
 
+// ============ LLM Configuration ============
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LLMConfig {
+    #[serde(default = "default_assistant_model")]
+    pub assistant_model: String,
+    #[serde(default = "default_rp_model")]
+    pub rp_model: String,
+    pub openrouter_api_key: Option<String>,
+    pub openai_api_key: Option<String>,
+    // Legacy field for migration
+    #[serde(skip_serializing, default)]
+    chat_model: Option<String>,
+}
+
+fn default_assistant_model() -> String {
+    "openai/chatgpt-4o-latest".to_string()
+}
+
+fn default_rp_model() -> String {
+    "openai/chatgpt-4o-latest".to_string()
+}
+
+impl Default for LLMConfig {
+    fn default() -> Self {
+        Self {
+            assistant_model: default_assistant_model(),
+            rp_model: default_rp_model(),
+            openrouter_api_key: None,
+            openai_api_key: None,
+            chat_model: None,
+        }
+    }
+}
+
+fn load_llm_config() -> Result<LLMConfig, String> {
+    let config_path = get_llm_config_path()?;
+    if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read LLM config: {}", e))?;
+        let mut config: LLMConfig = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse LLM config: {}", e))?;
+
+        // Migration: if old chat_model exists, use it for assistant_model
+        if let Some(old_model) = config.chat_model.take() {
+            if config.assistant_model == default_assistant_model() {
+                config.assistant_model = old_model;
+            }
+            // Save migrated config
+            let _ = save_llm_config(&config);
+        }
+
+        Ok(config)
+    } else {
+        Ok(LLMConfig::default())
+    }
+}
+
+fn save_llm_config(config: &LLMConfig) -> Result<(), String> {
+    let config_path = get_llm_config_path()?;
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+    let content = serde_json::to_string_pretty(config)
+        .map_err(|e| format!("Failed to serialize LLM config: {}", e))?;
+    std::fs::write(&config_path, content).map_err(|e| format!("Failed to save LLM config: {}", e))
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TransformConfig {
     pub scale: f64,
@@ -210,6 +283,30 @@ fn load_transform_config() -> Result<TransformConfig, String> {
 #[tauri::command]
 fn quit_app() {
     std::process::exit(0);
+}
+
+#[tauri::command]
+fn get_autostart_enabled(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autostart_manager = app.autolaunch();
+    autostart_manager
+        .is_enabled()
+        .map_err(|e| format!("Failed to check autostart status: {}", e))
+}
+
+#[tauri::command]
+fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autostart_manager = app.autolaunch();
+    if enabled {
+        autostart_manager
+            .enable()
+            .map_err(|e| format!("Failed to enable autostart: {}", e))
+    } else {
+        autostart_manager
+            .disable()
+            .map_err(|e| format!("Failed to disable autostart: {}", e))
+    }
 }
 
 /// Maximum depth to search for model files in nested directories
@@ -636,25 +733,11 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 
 #[command]
 async fn save_api_key(key: String) -> Result<(), String> {
-    info!("[save_api_key] Starting to save API key");
-    let key_path = get_api_key_path()?;
-    info!("[save_api_key] Key path: {:?}", key_path);
-
-    // Ensure parent directory exists
-    if let Some(parent) = key_path.parent() {
-        info!("[save_api_key] Creating parent directory: {:?}", parent);
-        std::fs::create_dir_all(parent).map_err(|e| {
-            error!("[save_api_key] Failed to create directory: {}", e);
-            format!("Failed to create directory: {}", e)
-        })?;
-    }
-
-    std::fs::write(&key_path, &key).map_err(|e| {
-        error!("[save_api_key] Failed to save API key: {}", e);
-        format!("Failed to save API key: {}", e)
-    })?;
-
-    info!("[save_api_key] API key saved successfully");
+    info!("[save_api_key] Starting to save OpenRouter API key");
+    let mut config = load_llm_config()?;
+    config.openrouter_api_key = Some(key);
+    save_llm_config(&config)?;
+    info!("[save_api_key] OpenRouter API key saved successfully");
     Ok(())
 }
 
@@ -709,21 +792,13 @@ fn get_builtin_api_key() -> Option<String> {
 
 #[command]
 async fn get_api_key() -> Result<Option<String>, String> {
-    // First, check for compile-time embedded key
+    // First check for built-in key (compile-time embedded)
     if let Some(builtin_key) = get_builtin_api_key() {
         return Ok(Some(builtin_key));
     }
-
-    // Fall back to user-configured key
-    let key_path = get_api_key_path()?;
-
-    if key_path.exists() {
-        let key = std::fs::read_to_string(&key_path)
-            .map_err(|e| format!("Failed to read API key: {}", e))?;
-        Ok(Some(key.trim().to_string()))
-    } else {
-        Ok(None)
-    }
+    // Fall back to user-configured key in LLM config
+    let config = load_llm_config()?;
+    Ok(config.openrouter_api_key)
 }
 
 #[command]
@@ -732,10 +807,139 @@ async fn has_api_key() -> Result<bool, String> {
     if get_builtin_api_key().is_some() {
         return Ok(true);
     }
+    // Fall back to checking LLM config
+    let config = load_llm_config()?;
+    Ok(config.openrouter_api_key.is_some())
+}
 
-    // Fall back to checking user-configured key
-    let key_path = get_api_key_path()?;
-    Ok(key_path.exists())
+// ============ OpenAI Key Commands (for image editing) ============
+
+#[command]
+async fn save_openai_key(key: String) -> Result<(), String> {
+    info!("[save_openai_key] Saving OpenAI API key for image editing");
+    let mut config = load_llm_config()?;
+    config.openai_api_key = Some(key);
+    save_llm_config(&config)?;
+    info!("[save_openai_key] OpenAI API key saved successfully");
+    Ok(())
+}
+
+#[command]
+async fn get_openai_key() -> Result<Option<String>, String> {
+    // First check for built-in key (compile-time embedded)
+    if let Some(builtin_key) = get_builtin_api_key() {
+        return Ok(Some(builtin_key));
+    }
+    // Fall back to user-configured key in LLM config
+    let config = load_llm_config()?;
+    Ok(config.openai_api_key)
+}
+
+#[command]
+async fn has_openai_key() -> Result<bool, String> {
+    // Check for built-in key first
+    if get_builtin_api_key().is_some() {
+        return Ok(true);
+    }
+    // Fall back to checking LLM config
+    let config = load_llm_config()?;
+    Ok(config.openai_api_key.is_some())
+}
+
+// ============ LLM Model Selection Commands ============
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ModelOption {
+    pub id: String,
+    pub name: String,
+    pub supports_vision: bool,
+}
+
+#[command]
+async fn get_llm_config_cmd() -> Result<LLMConfig, String> {
+    load_llm_config()
+}
+
+#[command]
+async fn set_model(model: String, context_level: u8) -> Result<(), String> {
+    info!(
+        "[set_model] Setting model to: {} for context level: {}",
+        model, context_level
+    );
+    let mut config = load_llm_config()?;
+    match context_level {
+        0 => config.assistant_model = model,
+        1 => config.rp_model = model,
+        _ => return Err(format!("Invalid context level: {}", context_level)),
+    }
+    save_llm_config(&config)?;
+    info!("[set_model] Model updated successfully");
+    Ok(())
+}
+
+#[command]
+async fn get_model_supports_vision(model_id: String) -> Result<bool, String> {
+    // Fetch models from OpenRouter API to check vision support
+    let models = get_available_models().await?;
+    Ok(models
+        .iter()
+        .find(|m| m.id == model_id)
+        .map(|m| m.supports_vision)
+        .unwrap_or(false))
+}
+
+#[command]
+async fn get_available_models() -> Result<Vec<ModelOption>, String> {
+    // Fetch models from OpenRouter API
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://openrouter.ai/api/v1/models")
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch models: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("OpenRouter API error: {}", response.status()));
+    }
+
+    let json: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse models response: {}", e))?;
+
+    let models = json["data"]
+        .as_array()
+        .ok_or_else(|| "Invalid response format".to_string())?;
+
+    let mut result: Vec<ModelOption> = models
+        .iter()
+        .filter_map(|m| {
+            let id = m["id"].as_str()?.to_string();
+            let name = m["name"].as_str().unwrap_or(&id).to_string();
+
+            // Check if model supports vision by looking at architecture.input_modalities
+            let supports_vision = m["architecture"]["input_modalities"]
+                .as_array()
+                .map(|modalities| {
+                    modalities
+                        .iter()
+                        .any(|mod_val| mod_val.as_str() == Some("image"))
+                })
+                .unwrap_or(false);
+
+            Some(ModelOption {
+                id,
+                name,
+                supports_vision,
+            })
+        })
+        .collect();
+
+    // Sort by name for easier browsing
+    result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    Ok(result)
 }
 
 // ============ Prompt Commands ============
@@ -914,6 +1118,51 @@ async fn clear_hitbox() -> Result<(), String> {
 
 // ============ Chat Commands ============
 
+const OPENROUTER_REFERER: &str = "https://oto.frisson.app";
+const OPENROUTER_TITLE: &str = "Oto Desktop";
+
+async fn call_openrouter_chat(
+    messages: Vec<Value>,
+    max_tokens: u32,
+    stream: bool,
+    context_level: u8,
+) -> Result<reqwest::Response, String> {
+    let config = load_llm_config()?;
+    // Use built-in key if available, otherwise use user-configured key
+    let api_key = get_builtin_api_key()
+        .or(config.openrouter_api_key)
+        .ok_or_else(|| "OpenRouter API key not configured".to_string())?;
+
+    // Select model based on context level
+    let model = match context_level {
+        1 => config.rp_model,
+        _ => config.assistant_model,
+    };
+
+    let client = reqwest::Client::new();
+
+    let mut body = json!({
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens
+    });
+
+    if stream {
+        body["stream"] = json!(true);
+    }
+
+    client
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("HTTP-Referer", OPENROUTER_REFERER)
+        .header("X-Title", OPENROUTER_TITLE)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("API request failed: {}", e))
+}
+
 #[command]
 async fn send_chat_message(
     app: AppHandle,
@@ -921,11 +1170,6 @@ async fn send_chat_message(
     include_screenshot: bool,
     context_level: u8,
 ) -> Result<ChatResponse, String> {
-    // Get API key
-    let api_key = get_api_key()
-        .await?
-        .ok_or_else(|| "API key not configured".to_string())?;
-
     // Get system prompt based on level
     let system_prompt = match context_level {
         1 => {
@@ -1009,20 +1253,8 @@ async fn send_chat_message(
         }));
     }
 
-    // Call OpenAI API for main response
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&json!({
-            "model": "gpt-4.1-2025-04-14",
-            "messages": messages,
-            "max_tokens": 1000
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("API request failed: {}", e))?;
+    // Call OpenRouter API for main response
+    let response = call_openrouter_chat(messages, 1000, false, context_level).await?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
@@ -1069,11 +1301,6 @@ async fn send_chat_message_stream(
     include_screenshot: bool,
     context_level: u8,
 ) -> Result<(), String> {
-    // Get API key
-    let api_key = get_api_key()
-        .await?
-        .ok_or_else(|| "API key not configured".to_string())?;
-
     // Get system prompt based on level
     let system_prompt = match context_level {
         1 => get_dialogue_prompt().await?,
@@ -1152,21 +1379,8 @@ async fn send_chat_message_stream(
         _ => "assistant",
     };
 
-    // Call OpenAI API with streaming
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&json!({
-            "model": "gpt-4.1-2025-04-14",
-            "messages": messages,
-            "max_tokens": 1000,
-            "stream": true
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("API request failed: {}", e))?;
+    // Call OpenRouter API with streaming
+    let response = call_openrouter_chat(messages, 1000, true, context_level).await?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
@@ -1258,249 +1472,6 @@ async fn clear_all_data() -> Result<(), String> {
 }
 
 #[command]
-async fn generate_texture(prompt: String) -> Result<String, String> {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-    use image::GenericImageView;
-
-    // Load model config for dynamic paths
-    let config = load_model_config()?;
-    let texture_folder = config
-        .texture_folder
-        .ok_or_else(|| "No texture folder configured for this model".to_string())?;
-    let texture_dir = get_texture_dir_for_model(&config.folder, &texture_folder)?;
-    let originals_dir = get_originals_dir_for_model(&config.folder, &texture_folder)?;
-
-    // Get OpenAI API key
-    let api_key = get_api_key()
-        .await?
-        .ok_or_else(|| "No API key configured".to_string())?;
-
-    // Discover texture files dynamically
-    let texture_files: Vec<String> = std::fs::read_dir(&texture_dir)
-        .map_err(|e| format!("Failed to read texture directory: {}", e))?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "png"))
-        .filter(|e| !e.path().is_dir())
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .collect();
-
-    if texture_files.is_empty() {
-        return Err("No texture files found in model".to_string());
-    }
-
-    for texture_file in &texture_files {
-        let texture_path = texture_dir.join(texture_file);
-        let original_path = originals_dir.join(texture_file);
-
-        // Ensure we have originals backed up first
-        if !original_path.exists() {
-            if texture_path.exists() {
-                std::fs::create_dir_all(&originals_dir)
-                    .map_err(|e| format!("Failed to create originals dir: {}", e))?;
-                std::fs::copy(&texture_path, &original_path)
-                    .map_err(|e| format!("Failed to backup {}: {}", texture_file, e))?;
-            } else {
-                continue;
-            }
-        }
-
-        // Load the original image
-        let img = image::open(&original_path)
-            .map_err(|e| format!("Failed to load {}: {}", texture_file, e))?;
-
-        let (orig_width, orig_height) = img.dimensions();
-        println!(
-            "[Texture] Processing {} - original dimensions: {}x{}",
-            texture_file, orig_width, orig_height
-        );
-
-        // Downscale to 1024x1024 for OpenAI
-        println!("[Texture] Downscaling to 1024x1024...");
-        let downscaled = img.resize_exact(1024, 1024, image::imageops::FilterType::Lanczos3);
-
-        // Encode as PNG bytes
-        let mut png_bytes: Vec<u8> = Vec::new();
-        downscaled
-            .write_to(
-                &mut std::io::Cursor::new(&mut png_bytes),
-                image::ImageFormat::Png,
-            )
-            .map_err(|e| format!("Failed to encode image: {}", e))?;
-
-        // Create multipart form for OpenAI API
-        let form = reqwest::multipart::Form::new()
-            .text("model", "gpt-image-1.5")
-            .text(
-                "prompt",
-                format!(
-                    "This is a texture atlas for a Live2D anime character. {}. \
-                CRITICAL: Keep every element in its EXACT position. \
-                Preserve all black outlines/lineart. \
-                Only modify what the prompt asks for. \
-                Maintain the same art style and quality.",
-                    prompt
-                ),
-            )
-            .text("size", "1024x1024")
-            .text("background", "transparent")
-            .text("output_format", "png")
-            .part(
-                "image[]",
-                reqwest::multipart::Part::bytes(png_bytes)
-                    .file_name("texture.png")
-                    .mime_str("image/png")
-                    .map_err(|e| format!("Failed to set mime type: {}", e))?,
-            );
-
-        // Call OpenAI API
-        println!("[Texture] Sending to OpenAI...");
-        let client = reqwest::Client::new();
-        let response = client
-            .post("https://api.openai.com/v1/images/edits")
-            .header("Authorization", format!("Bearer {}", api_key))
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|e| format!("OpenAI API failed for {}: {}", texture_file, e))?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(format!(
-                "OpenAI API error for {}: {}",
-                texture_file, error_text
-            ));
-        }
-
-        let response_json: Value = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse response for {}: {}", texture_file, e))?;
-
-        println!("[Texture] Response received, extracting image...");
-
-        // Extract base64 image from response
-        let image_data = response_json["data"][0]["b64_json"]
-            .as_str()
-            .ok_or_else(|| format!("No image in response for {}", texture_file))?;
-
-        // Decode the edited image
-        let decoded = BASE64
-            .decode(image_data)
-            .map_err(|e| format!("Failed to decode {}: {}", texture_file, e))?;
-
-        let edited_img = image::load_from_memory(&decoded)
-            .map_err(|e| format!("Failed to load edited {}: {}", texture_file, e))?;
-
-        // Upscale back to original dimensions (2048x2048)
-        println!(
-            "[Texture] Upscaling back to {}x{}...",
-            orig_width, orig_height
-        );
-        let upscaled = edited_img.resize_exact(
-            orig_width,
-            orig_height,
-            image::imageops::FilterType::Lanczos3,
-        );
-
-        // Save the upscaled image
-        upscaled
-            .save(&texture_path)
-            .map_err(|e| format!("Failed to save {}: {}", texture_file, e))?;
-
-        println!("[Texture] {} completed successfully", texture_file);
-    }
-
-    // Save this generation as a version
-    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let version_dir = get_versions_dir_for_model(&config.folder, &texture_folder)?.join(&timestamp);
-    std::fs::create_dir_all(&version_dir)
-        .map_err(|e| format!("Failed to create version dir: {}", e))?;
-
-    // Copy all processed textures to the version folder
-    for texture_file in &texture_files {
-        let src = texture_dir.join(texture_file);
-        let dst = version_dir.join(texture_file);
-        if src.exists() {
-            std::fs::copy(&src, &dst)
-                .map_err(|e| format!("Failed to copy {} to version: {}", texture_file, e))?;
-        }
-    }
-
-    // Save metadata
-    let metadata = json!({
-        "timestamp": timestamp,
-        "prompt": prompt,
-        "created_at": chrono::Utc::now().to_rfc3339()
-    });
-    std::fs::write(version_dir.join("metadata.json"), metadata.to_string())
-        .map_err(|e| format!("Failed to save metadata: {}", e))?;
-
-    Ok("Texture generated successfully!".to_string())
-}
-
-#[derive(Serialize)]
-pub struct TexturePaths {
-    pub current_textures: Vec<String>,
-    pub original_textures: Vec<String>,
-    pub has_original: bool,
-    pub texture_enabled: bool,
-}
-
-#[command]
-async fn get_texture_paths() -> Result<TexturePaths, String> {
-    let config = load_model_config()?;
-
-    // Check if texture editing is enabled for this model
-    let texture_folder = match &config.texture_folder {
-        Some(folder) => folder.clone(),
-        None => {
-            return Ok(TexturePaths {
-                current_textures: vec![],
-                original_textures: vec![],
-                has_original: false,
-                texture_enabled: false,
-            });
-        }
-    };
-
-    let texture_dir = get_texture_dir_for_model(&config.folder, &texture_folder)?;
-    let originals_dir = get_originals_dir_for_model(&config.folder, &texture_folder)?;
-
-    // Discover current textures
-    let current_textures: Vec<String> = if texture_dir.exists() {
-        std::fs::read_dir(&texture_dir)
-            .map_err(|e| format!("Failed to read texture directory: {}", e))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().is_some_and(|ext| ext == "png"))
-            .filter(|e| !e.path().is_dir())
-            .map(|e| e.path().to_string_lossy().to_string())
-            .collect()
-    } else {
-        vec![]
-    };
-
-    // Discover original textures
-    let original_textures: Vec<String> = if originals_dir.exists() {
-        std::fs::read_dir(&originals_dir)
-            .map_err(|e| format!("Failed to read originals directory: {}", e))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().is_some_and(|ext| ext == "png"))
-            .filter(|e| !e.path().is_dir())
-            .map(|e| e.path().to_string_lossy().to_string())
-            .collect()
-    } else {
-        vec![]
-    };
-
-    Ok(TexturePaths {
-        has_original: !original_textures.is_empty(),
-        current_textures,
-        original_textures,
-        texture_enabled: true,
-    })
-}
-
-#[command]
 async fn reload_character(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
@@ -1572,139 +1543,6 @@ async fn reload_character(
     Ok("Character reloaded!".to_string())
 }
 
-// TextureVersion struct is in models.rs
-
-#[command]
-async fn get_texture_versions() -> Result<Vec<TextureVersion>, String> {
-    let config = load_model_config()?;
-    let texture_folder = config
-        .texture_folder
-        .ok_or_else(|| "No texture folder configured".to_string())?;
-
-    let versions_dir = get_versions_dir_for_model(&config.folder, &texture_folder)?;
-    let originals_dir = get_originals_dir_for_model(&config.folder, &texture_folder)?;
-
-    let mut versions = Vec::new();
-
-    // Add generated versions
-    if versions_dir.exists() {
-        for entry in std::fs::read_dir(&versions_dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            if entry.path().is_dir() {
-                let id = entry.file_name().to_string_lossy().to_string();
-                let metadata_path = entry.path().join("metadata.json");
-                let (created_at, prompt) = if metadata_path.exists() {
-                    let content = std::fs::read_to_string(&metadata_path).unwrap_or_default();
-                    let json: Value = serde_json::from_str(&content).unwrap_or(json!({}));
-                    (
-                        json["created_at"].as_str().unwrap_or(&id).to_string(),
-                        json["prompt"].as_str().map(|s| s.to_string()),
-                    )
-                } else {
-                    (id.clone(), None)
-                };
-                versions.push(TextureVersion {
-                    id,
-                    created_at,
-                    prompt,
-                });
-            }
-        }
-    }
-
-    versions.sort_by(|a, b| b.id.cmp(&a.id)); // Newest first
-
-    // Add "original" as the last option if originals exist
-    if originals_dir.exists() {
-        // Check if any png files exist in originals
-        let has_originals = std::fs::read_dir(&originals_dir)
-            .ok()
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .any(|e| e.path().extension().is_some_and(|ext| ext == "png"))
-            })
-            .unwrap_or(false);
-
-        if has_originals {
-            versions.push(TextureVersion {
-                id: "original".to_string(),
-                created_at: "Original".to_string(),
-                prompt: Some("Original textures".to_string()),
-            });
-        }
-    }
-
-    Ok(versions)
-}
-
-#[command]
-async fn apply_texture_version(version_id: String) -> Result<String, String> {
-    let config = load_model_config()?;
-    let texture_folder = config
-        .texture_folder
-        .ok_or_else(|| "No texture folder configured".to_string())?;
-
-    let texture_dir = get_texture_dir_for_model(&config.folder, &texture_folder)?;
-
-    // Handle "original" as a special case
-    let source_dir = if version_id == "original" {
-        get_originals_dir_for_model(&config.folder, &texture_folder)?
-    } else {
-        get_versions_dir_for_model(&config.folder, &texture_folder)?.join(&version_id)
-    };
-
-    if !source_dir.exists() {
-        return Err("Version not found".to_string());
-    }
-
-    // Discover and copy all texture files from the source
-    for entry in
-        std::fs::read_dir(&source_dir).map_err(|e| format!("Failed to read source: {}", e))?
-    {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if entry.path().extension().is_some_and(|ext| ext == "png") {
-            let file_name = entry.file_name();
-            let dst = texture_dir.join(&file_name);
-            std::fs::copy(entry.path(), &dst)
-                .map_err(|e| format!("Failed to apply {:?}: {}", file_name, e))?;
-        }
-    }
-
-    Ok(format!(
-        "Applied {}",
-        if version_id == "original" {
-            "original textures"
-        } else {
-            &version_id
-        }
-    ))
-}
-
-#[command]
-async fn delete_texture_version(version_id: String) -> Result<String, String> {
-    // Prevent deleting the original
-    if version_id == "original" {
-        return Err("Cannot delete original textures".to_string());
-    }
-
-    let config = load_model_config()?;
-    let texture_folder = config
-        .texture_folder
-        .ok_or_else(|| "No texture folder configured".to_string())?;
-
-    let versions_dir = get_versions_dir_for_model(&config.folder, &texture_folder)?;
-    let version_path = versions_dir.join(&version_id);
-
-    if !version_path.exists() {
-        return Err("Version not found".to_string());
-    }
-
-    std::fs::remove_dir_all(&version_path).map_err(|e| format!("Failed to delete: {}", e))?;
-
-    Ok("Version deleted".to_string())
-}
-
 // ============ App State ============
 
 #[derive(Default)]
@@ -1733,22 +1571,65 @@ fn configure_overlay(window: &tauri::WebviewWindow) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
+const OVERLAY_SUBCLASS_ID: usize = 1;
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn overlay_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _uidsubclass: usize,
+    _dwrefdata: usize,
+) -> LRESULT {
+    match msg {
+        x if x == WM_NCACTIVATE => LRESULT(1),  // Prevent activation painting
+        x if x == WM_NCPAINT => LRESULT(0),      // Suppress NC painting
+        x if x == WM_NCCALCSIZE => {
+            if wparam.0 != 0 {
+                return LRESULT(0);  // Make entire window client area
+            }
+            DefSubclassProc(hwnd, msg, wparam, lparam)
+        }
+        x if x == WM_NCDESTROY => {
+            // Cleanup subclass on window destroy
+            let _ = RemoveWindowSubclass(hwnd, Some(overlay_subclass_proc), OVERLAY_SUBCLASS_ID);
+            DefSubclassProc(hwnd, msg, wparam, lparam)
+        }
+        _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn configure_overlay(window: &tauri::WebviewWindow) -> Result<(), String> {
     let hwnd = window
         .hwnd()
         .map_err(|e| format!("Failed to get HWND: {}", e))?;
+
     unsafe {
         SetWindowPos(
             HWND(hwnd.0),
             HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
+            0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         )
         .map_err(|e| format!("SetWindowPos failed: {}", e))?;
+
+        // Install subclass to prevent WebView2 title bar bug
+        let result = SetWindowSubclass(
+            HWND(hwnd.0),
+            Some(overlay_subclass_proc),
+            OVERLAY_SUBCLASS_ID,
+            0,
+        );
+
+        if !result.as_bool() {
+            warn!("Failed to install window subclass for overlay");
+        } else {
+            info!("Successfully installed overlay window subclass");
+        }
     }
+
     Ok(())
 }
 
@@ -2579,6 +2460,21 @@ async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[command]
+fn is_debug_mode() -> bool {
+    cfg!(debug_assertions)
+}
+
+#[command]
+async fn open_overlay_devtools(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("overlay") {
+        window.open_devtools();
+        Ok(())
+    } else {
+        Err("Overlay window not found".to_string())
+    }
+}
+
 // ============ Main ============
 
 fn main() {
@@ -2749,6 +2645,10 @@ fn main() {
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec![]),
+        ))
         .plugin(
             tauri_plugin_log::Builder::new()
                 .target(tauri_plugin_log::Target::new(
@@ -2766,20 +2666,23 @@ fn main() {
                         && (shortcut.matches(Modifiers::ALT, Code::Space)
                             || shortcut.matches(Modifiers::SUPER, Code::Space))
                     {
-                        // Show overlay if hidden
                         let is_visible = {
                             let state = app.state::<AppState>();
                             let visible = *state.overlay_visible.lock().unwrap();
                             visible
                         };
+
                         if !is_visible {
+                            // State 0 → State 1: Show character only
                             toggle_overlay_sync(app);
+                            let _ = app.emit("shortcut-show-character", ());
+                        } else {
+                            // State 1 or 2: Let frontend cycle
+                            if let Some(window) = app.get_webview_window("overlay") {
+                                let _ = window.set_focus();
+                            }
+                            let _ = app.emit("shortcut-cycle-state", ());
                         }
-                        // Focus the overlay window so keyboard input works
-                        if let Some(window) = app.get_webview_window("overlay") {
-                            let _ = window.set_focus();
-                        }
-                        let _ = app.emit("toggle-textbox", ());
                     }
                 })
                 .build(),
@@ -2813,6 +2716,13 @@ fn main() {
             save_api_key,
             get_api_key,
             has_api_key,
+            save_openai_key,
+            get_openai_key,
+            has_openai_key,
+            get_llm_config_cmd,
+            set_model,
+            get_model_supports_vision,
+            get_available_models,
             save_system_prompt,
             get_system_prompt,
             save_character_prompt,
@@ -2824,12 +2734,7 @@ fn main() {
             get_chat_history,
             clear_chat_history,
             clear_all_data,
-            generate_texture,
-            get_texture_paths,
             reload_character,
-            get_texture_versions,
-            apply_texture_version,
-            delete_texture_version,
             save_hitbox,
             load_hitbox,
             clear_hitbox,
@@ -2837,6 +2742,10 @@ fn main() {
             load_transform_config,
             log_from_frontend,
             quit_app,
+            get_autostart_enabled,
+            set_autostart_enabled,
+            is_debug_mode,
+            open_overlay_devtools,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

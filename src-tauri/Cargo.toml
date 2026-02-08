@@ -26,6 +26,7 @@ base64 = "0.22"
 chrono = "0.4"
 image = "0.25"
 tauri-plugin-log = "2"
+tauri-plugin-autostart = "2"
 log = "0.4"
 urlencoding = "2"
 mime_guess = "2"
@@ -40,5 +41,6 @@ core-graphics = "0.24"
 windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
-    "Win32_Graphics_Gdi"
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Shell"
 ] }

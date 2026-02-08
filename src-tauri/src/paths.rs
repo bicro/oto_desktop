@@ -41,9 +41,14 @@ pub fn get_db_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join("chat_history.db"))
 }
 
-/// Gets the API key file path
+/// Gets the API key file path (legacy - use get_llm_config_path instead)
 pub fn get_api_key_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join(".api_key"))
+}
+
+/// Gets the LLM configuration file path
+pub fn get_llm_config_path() -> Result<PathBuf, String> {
+    get_app_data_dir().map(|p| p.join(".llm_config.json"))
 }
 
 /// Gets the system prompt file path
@@ -79,28 +84,4 @@ pub fn get_overlay_scale_path() -> Result<PathBuf, String> {
 /// Gets the transform configuration file path
 pub fn get_transform_config_path() -> Result<PathBuf, String> {
     get_app_data_dir().map(|p| p.join(".transform_config.json"))
-}
-
-/// Gets the texture directory path for a specific model
-pub fn get_texture_dir_for_model(
-    model_folder: &str,
-    texture_folder: &str,
-) -> Result<PathBuf, String> {
-    get_models_dir().map(|p| p.join(model_folder).join(texture_folder))
-}
-
-/// Gets the originals backup directory path for a specific model
-pub fn get_originals_dir_for_model(
-    model_folder: &str,
-    texture_folder: &str,
-) -> Result<PathBuf, String> {
-    get_texture_dir_for_model(model_folder, texture_folder).map(|p| p.join("originals"))
-}
-
-/// Gets the texture versions directory path for a specific model
-pub fn get_versions_dir_for_model(
-    model_folder: &str,
-    texture_folder: &str,
-) -> Result<PathBuf, String> {
-    get_texture_dir_for_model(model_folder, texture_folder).map(|p| p.join("versions"))
 }

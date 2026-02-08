@@ -55,6 +55,16 @@ else
     MISSING+=("sqlite")
 fi
 
+# Check jq (required for macOS build scripts)
+if [[ $OS == "macos" ]]; then
+    if command -v jq &>/dev/null; then
+        ok "jq $(jq --version | cut -d'-' -f2)"
+    else
+        err "jq not installed"
+        MISSING+=("jq")
+    fi
+fi
+
 # Check Linux system deps (required for Tauri)
 if [[ $OS == "linux" ]]; then
     if dpkg -s pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-1 gnome-screenshot &>/dev/null 2>&1; then
@@ -98,6 +108,10 @@ for dep in "${MISSING[@]}"; do
                 else
                     sudo apt-get update && sudo apt-get install -y sqlite3 libsqlite3-dev
                 fi
+            fi ;;
+        jq)
+            if prompt "jq"; then
+                brew install jq
             fi ;;
         linux-deps)
             if prompt "Linux system dependencies (required for Tauri)"; then

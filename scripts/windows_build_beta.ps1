@@ -49,7 +49,7 @@ foreach ($tester in $testers) {
     Write-Host "----------------------------------------" -ForegroundColor Gray
 
     # Set the API key environment variable
-    $env:OPENAI_API_KEY = $apiKey
+    $env:OPENROUTER_API_KEY = $apiKey
 
     # Run the build from project root
     Write-Host "Running build..." -ForegroundColor Yellow
@@ -91,7 +91,7 @@ foreach ($tester in $testers) {
 }
 
 # Clear the environment variable
-Remove-Item Env:\OPENAI_API_KEY -ErrorAction SilentlyContinue
+Remove-Item Env:\OPENROUTER_API_KEY -ErrorAction SilentlyContinue
 
 # Summary
 Write-Host ""

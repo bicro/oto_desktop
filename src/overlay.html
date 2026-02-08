@@ -15,6 +15,25 @@
             box-sizing: border-box;
         }
 
+        /* Minimal scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.35);
+        }
+
         html, body {
             width: 100%;
             height: 100%;
@@ -47,7 +66,9 @@
             left: 50%;
             transform: translateX(-50%);
             padding: 8px 16px;
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(16px) saturate(180%);
+            -webkit-backdrop-filter: blur(16px) saturate(180%);
             color: white;
             font-size: 12px;
             border-radius: 8px;
@@ -68,12 +89,15 @@
             flex-direction: column;
             z-index: 2000;
             -webkit-app-region: no-drag;
+            cursor: default;
         }
 
         .chat-history {
             max-height: 0;
             overflow: hidden;
-            background: rgba(0, 0, 0, 0.85);
+            background: rgba(0, 0, 0, 0.78);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
             border-radius: 16px 16px 0 0;
             display: flex;
             flex-direction: column;
@@ -90,7 +114,9 @@
             align-items: center;
             gap: 8px;
             padding: 8px;
-            background: rgba(0, 0, 0, 0.85);
+            background: rgba(0, 0, 0, 0.78);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
             border-radius: 9999px;
             opacity: 0;
             transform: translateY(20px);
@@ -103,14 +129,30 @@
             transform: translateY(0);
         }
 
-        body:hover .chat-input-bar {
+        body.hover-enabled:hover .chat-input-bar {
             opacity: 1;
             transform: translateY(0);
         }
 
-        .chat-input-bar:focus-within {
+        body:not(.input-hidden) .chat-input-bar:focus-within {
             opacity: 1;
             transform: translateY(0);
+        }
+
+        /* Hide input bar when in character-only mode (State 1) */
+        body.input-hidden .chat-input-bar {
+            opacity: 0 !important;
+            transform: translateY(20px) !important;
+            pointer-events: none;
+            transition: none !important;
+        }
+
+        /* Show input bar when chat history is visible, even in input-hidden mode */
+        body.input-hidden .chat-history.visible ~ .chat-input-bar {
+            opacity: 1 !important;
+            transform: translateY(0) !important;
+            pointer-events: auto;
+            border-radius: 0 0 24px 24px;
         }
 
         .chat-input-bar input {
@@ -292,7 +334,7 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
 
-        body:hover .status-indicator {
+        body.hover-enabled:hover .status-indicator {
             opacity: 1;
         }
 
@@ -319,11 +361,18 @@
             justify-content: space-between;
             align-items: center;
             padding: 10px 14px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.15);
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             color: white;
             font-size: 14px;
             flex-shrink: 0;
+            cursor: grab;
+            background: #1a1a1a;
+            border-radius: 16px 16px 0 0;
+        }
+
+        .history-header:active {
+            cursor: grabbing;
         }
 
         .history-header button {
@@ -333,6 +382,7 @@
             font-size: 16px;
             cursor: pointer;
             padding: 2px 6px;
+            -webkit-app-region: no-drag;
         }
 
         .history-content {
@@ -341,6 +391,7 @@
             padding: 12px;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             min-height: 100px;
+            cursor: text;
         }
 
         .history-message {
@@ -363,23 +414,79 @@
         }
 
         .history-message.user {
-            background: rgba(74, 158, 255, 0.2);
+            background: rgba(74, 158, 255, 0.15);
             color: #a8d4ff;
             margin-left: 20%;
+            border-radius: 12px 12px 4px 12px;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            white-space: pre-wrap;
+            border: 1px solid rgba(74, 158, 255, 0.25);
         }
 
         .history-message.assistant {
-            background: rgba(255, 255, 255, 0.1);
+            background: transparent;
             color: white;
-            margin-right: 20%;
+            padding: 0;
+            border-radius: 0;
         }
 
         .history-message.character {
-            background: rgba(57, 197, 187, 0.15);
-            color: #39c5bb;
-            font-style: italic;
-            margin-right: 20%;
+            background: rgba(57, 197, 187, 0.08);
+            color: #e0e0e0;
+            font-style: normal;
+            padding: 12px;
+            border-radius: 12px 12px 12px 4px;
             border-left: 3px solid #39c5bb;
+            margin-right: 20%;
+        }
+
+        /* RP Action styling */
+        .rp-action {
+            color: #fbbf24;
+            font-style: italic;
+            font-weight: 500;
+            opacity: 0.9;
+        }
+
+        /* Message headers for character name */
+        .message-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        .message-header-name {
+            font-weight: 600;
+        }
+
+        .message-header-name.character {
+            color: #39c5bb;
+        }
+
+        .message-avatar {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: rgba(57, 197, 187, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            color: #39c5bb;
+        }
+
+        /* Improved message bubbles */
+        .history-message + .history-message {
+            margin-top: 8px;
+        }
+
+        .history-message.user + .history-message.character,
+        .history-message.character + .history-message.user {
+            margin-top: 16px;
         }
 
         .history-message.focused,
@@ -431,6 +538,153 @@
             margin: 3px 0;
         }
 
+        /* Enhanced Markdown Styles */
+        .md-p {
+            margin: 0 0 12px 0;
+            line-height: 1.6;
+        }
+
+        .md-h2 {
+            font-size: 18px;
+            font-weight: 600;
+            margin: 16px 0 8px 0;
+        }
+
+        .md-h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin: 14px 0 6px 0;
+        }
+
+        .md-h4 {
+            font-size: 14px;
+            font-weight: 600;
+            margin: 12px 0 6px 0;
+        }
+
+        .md-h5 {
+            font-size: 13px;
+            font-weight: 600;
+            margin: 10px 0 4px 0;
+        }
+
+        .code-block {
+            position: relative;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            margin: 12px 0;
+            overflow: hidden;
+        }
+
+        .code-block pre {
+            margin: 0;
+            padding: 12px;
+            overflow-x: auto;
+            background: transparent;
+        }
+
+        .code-block code {
+            background: transparent;
+            padding: 0;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .code-lang {
+            position: absolute;
+            top: 4px;
+            right: 8px;
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.4);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .inline-code {
+            background: rgba(255, 150, 100, 0.15);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+            font-size: 13px;
+        }
+
+        .md-blockquote {
+            border-left: 3px solid rgba(57, 197, 187, 0.6);
+            background: rgba(57, 197, 187, 0.08);
+            padding: 8px 12px;
+            margin: 12px 0;
+            font-style: italic;
+            border-radius: 0 4px 4px 0;
+        }
+
+        .md-link {
+            color: #39c5bb;
+            text-decoration: none;
+            transition: text-decoration 0.15s ease;
+        }
+
+        .md-link:hover {
+            text-decoration: underline;
+        }
+
+        .md-hr {
+            border: none;
+            border-top: 1px solid rgba(255, 255, 255, 0.15);
+            margin: 16px 0;
+        }
+
+        .md-table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 12px 0;
+            font-size: 13px;
+        }
+
+        .md-table th,
+        .md-table td {
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            padding: 8px 12px;
+            text-align: left;
+        }
+
+        .md-table th {
+            background: rgba(255, 255, 255, 0.08);
+            font-weight: 600;
+        }
+
+        .md-table tr:nth-child(even) {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .md-list {
+            margin: 8px 0;
+            padding-left: 0;
+            list-style: none;
+        }
+
+        .md-li {
+            margin: 4px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+
+        .md-li::before {
+            content: '•';
+            position: absolute;
+            left: 6px;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        .md-li[data-level="1"] { padding-left: 40px; }
+        .md-li[data-level="2"] { padding-left: 60px; }
+        .md-li[data-level="3"] { padding-left: 80px; }
+
+        .md-li[data-ordered]::before {
+            content: attr(data-index) '.';
+            left: 2px;
+        }
+
         /* Thinking animation */
         .thinking-indicator {
             display: inline;
@@ -457,6 +711,7 @@
         .chat-tabs {
             display: flex;
             gap: 4px;
+            -webkit-app-region: no-drag;
         }
 
         .chat-tab {
@@ -472,6 +727,7 @@
             cursor: pointer;
             transition: all 0.15s ease;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            -webkit-app-region: no-drag;
         }
 
         .chat-tab:hover {
@@ -493,8 +749,10 @@
         /* Context menu */
         .context-menu {
             position: fixed;
-            background: rgba(30, 30, 30, 0.95);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(20, 20, 20, 0.85);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border: 1px solid rgba(255, 255, 255, 0.12);
             border-radius: 8px;
             padding: 4px 0;
             min-width: 160px;
@@ -553,7 +811,7 @@
 
     </style>
 </head>
-<body>
+<body class="input-hidden">
     <canvas id="hitboxCanvas"></canvas>
     <canvas id="live2dCanvas"></canvas>
     <div class="hitbox-instructions" id="hitboxInstructions">
@@ -616,14 +874,15 @@
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
             <span id="trackingLabel">Disable Head Tracking</span>
         </div>
+        <div class="context-menu-separator debug-only" id="debugSeparator" style="display: none"></div>
+        <div class="context-menu-item debug-only" id="menuInspect" data-action="inspect" style="display: none">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/></svg>
+            Inspect Overlay
+        </div>
         <div class="context-menu-separator"></div>
         <div class="context-menu-item" data-action="hide">
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>
             Hide Character
-        </div>
-        <div class="context-menu-item danger" data-action="quit">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-            Quit
         </div>
     </div>
 
@@ -693,7 +952,15 @@
             /** Timestamp of last escape key press */
             lastEscapeTime: 0,
             /** Whether head tracking is enabled */
-            headTrackingEnabled: localStorage.getItem('headTrackingEnabled') === 'true'
+            headTrackingEnabled: localStorage.getItem('headTrackingEnabled') === 'true',
+            /** Whether assistant model supports vision */
+            assistantSupportsVision: true,
+            /** Whether RP model supports vision */
+            rpSupportsVision: true,
+            /** Shortcut toggle state: 0=hidden, 1=visible-unfocused, 2=visible-focused */
+            shortcutState: 0,
+            /** Character name for RP chat */
+            characterName: localStorage.getItem('characterName') || 'Character'
         };
 
         // ============ Asset URL Resolution ============
@@ -1533,11 +1800,11 @@
                         live2dOverlay.setParameter('ParamBodyAngleX', 0);
                     }
                     break;
+                case 'inspect':
+                    await invoke('open_overlay_devtools');
+                    break;
                 case 'hide':
                     await invoke('hide_overlay');
-                    break;
-                case 'quit':
-                    await invoke('quit_app');
                     break;
             }
         });
@@ -1637,6 +1904,12 @@
             }
         });
 
+        // Track for double-click and drag detection
+        let lastClickTime = 0;
+        let dragStartPos = null;
+        let isDragging = false;
+        const DRAG_THRESHOLD = 5; // pixels
+
         document.body.addEventListener('mousedown', async (event) => {
             // Hide context menu on any click outside of it
             if (!event.target.closest('.context-menu')) {
@@ -1656,12 +1929,54 @@
             if (event.target.closest('.textbox-container')) return;
             if (event.target.closest('.context-menu')) return;
 
-            // Only drag if inside polygon (or no polygon defined)
+            // Only allow drag if inside polygon (or no polygon defined)
             // AND not in transform edit mode
             if (!live2dOverlay.transformEditMode &&
                 (hitboxPoints.length < 3 || isPointInPolygon(event.clientX, event.clientY, hitboxPoints))) {
-                const win = getCurrentWindow();
-                await win.startDragging();
+                // Record starting position for movement detection
+                dragStartPos = { x: event.clientX, y: event.clientY };
+                isDragging = false;
+                lastClickTime = Date.now();
+            }
+        });
+
+        document.body.addEventListener('mousemove', async (event) => {
+            // Check if we should start dragging based on movement
+            if (dragStartPos && !isDragging) {
+                const dx = event.clientX - dragStartPos.x;
+                const dy = event.clientY - dragStartPos.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance > DRAG_THRESHOLD) {
+                    isDragging = true;
+                    const win = getCurrentWindow();
+                    win.startDragging();
+                }
+            }
+        });
+
+        document.body.addEventListener('mouseup', () => {
+            dragStartPos = null;
+            isDragging = false;
+        });
+
+        // Double-click character to focus chat input
+        document.body.addEventListener('dblclick', (event) => {
+            // Don't interfere with hitbox editing
+            if (hitboxEditMode) return;
+
+            // Don't interfere with UI elements
+            if (event.target.closest('.chat-panel')) return;
+            if (event.target.closest('.textbox-container')) return;
+            if (event.target.closest('.context-menu')) return;
+
+            // Only trigger if inside polygon (or no polygon defined)
+            if (hitboxPoints.length < 3 || isPointInPolygon(event.clientX, event.clientY, hitboxPoints)) {
+                // Transition to focused state (State 2)
+                AppState.shortcutState = 2;
+                document.body.classList.remove('input-hidden');
+                document.body.classList.add('hover-enabled');
+                chatInput.focus();
             }
         });
 
@@ -1674,6 +1989,26 @@
 
         // Set platform-specific placeholder on init
         chatInput.placeholder = defaultPlaceholder;
+
+        // Sync shortcut state with focus/blur events
+        chatInput.addEventListener('focus', () => {
+            if (AppState.shortcutState === 1) {
+                AppState.shortcutState = 2;
+                document.body.classList.remove('input-hidden');
+            }
+        });
+        chatInput.addEventListener('blur', () => {
+            if (AppState.shortcutState === 2) {
+                AppState.shortcutState = 1;
+                // Temporarily disable hover to show character-only state
+                document.body.classList.remove('hover-enabled');
+                setTimeout(() => {
+                    if (AppState.shortcutState === 1) {
+                        document.body.classList.add('hover-enabled');
+                    }
+                }, 300);
+            }
+        });
 
         // NOTE: State variables are now in AppState object at top of file
 
@@ -1744,14 +2079,29 @@
          */
         function changeHistoryLevel(direction) {
             // Switch between tabs: 0 (Assistant) <-> 1 (Character)
+            let newLevel;
             if (direction === 'right' && AppState.activeContextLevel === 0) {
-                AppState.activeContextLevel = 1;
+                newLevel = 1;
             } else if (direction === 'left' && AppState.activeContextLevel === 1) {
-                AppState.activeContextLevel = 0;
+                newLevel = 0;
             } else {
                 return; // Already at the edge
             }
 
+            // Check if new model supports vision
+            const newSupportsVision = newLevel === 0
+                ? AppState.assistantSupportsVision
+                : AppState.rpSupportsVision;
+
+            // If screenshot is enabled but new model doesn't support vision, disable it
+            if (AppState.includeScreenshot && !newSupportsVision) {
+                AppState.includeScreenshot = false;
+                localStorage.setItem('screenshotEnabled', 'false');
+                updateStatus("Model doesn't support images - screenshot disabled", 'listening');
+                setTimeout(() => updateStatus('', ''), 2000);
+            }
+
+            AppState.activeContextLevel = newLevel;
             AppState.historyFocusIndex = -1;
             loadChatHistory().then(() => {
                 applyHistoryFilter();
@@ -1823,13 +2173,49 @@
             updateInputStateForLevel();
             updateScreenshotVisual();
 
-            // Scroll to bottom after filter applied
-            scrollHistoryToBottom();
+            // Scroll to bottom after filter applied (force since user changed filter)
+            scrollHistoryToBottom(true);
         }
 
-        // Helper function to scroll history to bottom
-        function scrollHistoryToBottom() {
-            historyContent.scrollTop = historyContent.scrollHeight;
+        // Track if user is near bottom of scroll (for smart auto-scroll)
+        let userNearBottom = true;
+        const SCROLL_THRESHOLD = 50; // pixels from bottom to consider "at bottom"
+
+        // Track the user message element for the current streaming response
+        let currentUserMessageElement = null;
+
+        historyContent.addEventListener('scroll', () => {
+            const { scrollTop, scrollHeight, clientHeight } = historyContent;
+            userNearBottom = scrollHeight - scrollTop - clientHeight < SCROLL_THRESHOLD;
+        });
+
+        // Helper function to scroll history to bottom (only if user is near bottom)
+        // When streaming, stops scrolling once the user's message reaches the top
+        function scrollHistoryToBottom(force = false) {
+            if (force || userNearBottom) {
+                // If we have a user message to keep visible during streaming
+                if (currentUserMessageElement) {
+                    const containerRect = historyContent.getBoundingClientRect();
+                    const messageRect = currentUserMessageElement.getBoundingClientRect();
+
+                    // Calculate how far the user message is from the top of the container
+                    const messageTopRelativeToContainer = messageRect.top - containerRect.top;
+
+                    // If the message is still visible (not at the very top yet), we can scroll more
+                    // Allow scrolling until the message is near the top (with a small margin)
+                    const topMargin = 10;
+
+                    if (messageTopRelativeToContainer > topMargin) {
+                        // Message still has room to move up - scroll to bottom
+                        historyContent.scrollTop = historyContent.scrollHeight;
+                    }
+                    // else: message is at or past the top - don't scroll further
+                } else {
+                    // No user message tracking - scroll normally to bottom
+                    historyContent.scrollTop = historyContent.scrollHeight;
+                }
+                userNearBottom = true;
+            }
         }
 
         /**
@@ -1854,6 +2240,8 @@
         }
 
         function openTextbox() {
+            document.body.classList.remove('input-hidden');
+            document.body.classList.add('hover-enabled');  // Ensure hover enabled when opening
             updateScreenshotVisual(); // Apply saved state
             chatInput.focus();
         }
@@ -1862,18 +2250,51 @@
             chatInput.blur();
         }
 
-        listen('toggle-textbox', () => {
-            const isHistoryOpen = historyModal.classList.contains('visible');
+        // State 0 → State 1: Character just shown
+        listen('shortcut-show-character', () => {
+            AppState.shortcutState = 1;
+            closeTextbox();
+            // Enable hover after delay - prevents flicker if mouse already hovering
+            setTimeout(() => {
+                document.body.classList.remove('input-hidden');
+                document.body.classList.add('hover-enabled');
+            }, 200);
+        });
+
+        // State 1 → State 2 OR State 2 → State 0
+        listen('shortcut-cycle-state', () => {
             const isFocused = document.activeElement === chatInput;
 
-            if (isFocused && !isHistoryOpen) {
-                closeTextbox();
-            } else {
+            if (!isFocused) {
+                // State 1 → State 2: Focus input
+                AppState.shortcutState = 2;
                 openTextbox();
+            } else {
+                // State 2 → State 0: Hide character
+                AppState.shortcutState = 0;
+                document.body.classList.add('input-hidden');
+                document.body.classList.remove('hover-enabled');  // Disable hover before hiding
+                closeTextbox();
+                invoke('hide_overlay');
             }
         });
 
-        // Markdown parser function
+        // Sync state on external visibility changes (e.g., tray menu)
+        listen('overlay-visibility-changed', (event) => {
+            if (!event.payload.visible) {
+                AppState.shortcutState = 0;
+                document.body.classList.add('input-hidden');
+                document.body.classList.remove('hover-enabled');  // Disable hover when hiding
+            } else if (AppState.shortcutState === 0) {
+                AppState.shortcutState = 1;
+                setTimeout(() => {
+                    document.body.classList.remove('input-hidden');
+                    document.body.classList.add('hover-enabled');  // Enable hover after delay
+                }, 200);
+            }
+        });
+
+        // Enhanced Markdown parser function
         function parseMarkdown(text) {
             // Escape HTML first
             let html = text
@@ -1881,55 +2302,216 @@
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;');
 
-            // Code blocks (```...```)
+            // Code blocks with language label
             html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-                return `<pre><code class="lang-${lang}">${code.trim()}</code></pre>`;
+                const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
+                return `<div class="code-block">${langLabel}<pre><code>${code.trim()}</code></pre></div>`;
             });
 
-            // Inline code (`...`)
-            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+            // Inline code
+            html = html.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
 
-            // Headers (# ## ###)
-            html = html.replace(/^### (.*$)/gm, '<h4>$1</h4>');
-            html = html.replace(/^## (.*$)/gm, '<h3>$1</h3>');
-            html = html.replace(/^# (.*$)/gm, '<h2>$1</h2>');
+            // Headers (#### ### ## #)
+            html = html.replace(/^#### (.*$)/gm, '<h5 class="md-h5">$1</h5>');
+            html = html.replace(/^### (.*$)/gm, '<h4 class="md-h4">$1</h4>');
+            html = html.replace(/^## (.*$)/gm, '<h3 class="md-h3">$1</h3>');
+            html = html.replace(/^# (.*$)/gm, '<h2 class="md-h2">$1</h2>');
+
+            // Horizontal rules
+            html = html.replace(/^(---|\*\*\*|___)$/gm, '<hr class="md-hr">');
+
+            // Blockquotes
+            html = html.replace(/^&gt; (.*)$/gm, '<blockquote class="md-blockquote">$1</blockquote>');
+            // Merge consecutive blockquotes
+            html = html.replace(/<\/blockquote>\n<blockquote class="md-blockquote">/g, '<br>');
+
+            // Links [text](url)
+            html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="md-link" target="_blank" rel="noopener">$1</a>');
 
             // Bold (**text** or __text__)
             html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
             html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
 
-            // Italic (*text* or _text_)
+            // Italic (*text* or _text_) - using word boundaries
             html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
             html = html.replace(/(?<!_)_([^_]+)_(?!_)/g, '<em>$1</em>');
 
-            // Unordered lists
-            html = html.replace(/^[\s]*[-*+] (.+)$/gm, '<li>$1</li>');
+            // Tables
+            html = html.replace(/(?:^|\n)((?:\|[^\n]+\|\n)+)/g, (match, tableContent) => {
+                const rows = tableContent.trim().split('\n');
+                if (rows.length < 2) return match;
 
-            // Ordered lists
-            html = html.replace(/^[\s]*\d+\. (.+)$/gm, '<li>$1</li>');
+                // Check for separator row
+                const sepIndex = rows.findIndex(r => /^\|[\s\-:|]+\|$/.test(r));
+                if (sepIndex === -1) return match;
 
-            // Wrap consecutive li elements in ul
-            html = html.replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>');
-            html = html.replace(/<\/ul>\s*<ul>/g, '');
+                let tableHtml = '<table class="md-table">';
+                rows.forEach((row, i) => {
+                    if (i === sepIndex) return; // Skip separator
+                    const cells = row.split('|').filter(c => c.trim() !== '');
+                    const tag = i < sepIndex ? 'th' : 'td';
+                    tableHtml += '<tr>' + cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
+                });
+                tableHtml += '</table>';
+                return tableHtml;
+            });
 
-            // Line breaks (double newline = paragraph)
+            // Lists with nesting support
+            const lines = html.split('\n');
+            let inList = false;
+            let listItems = [];
+            let orderedCounter = 0;
+            let isOrdered = false;
+
+            const processedLines = [];
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const unorderedMatch = line.match(/^(\s*)([-*+]) (.+)$/);
+                const orderedMatch = line.match(/^(\s*)(\d+)\. (.+)$/);
+
+                if (unorderedMatch || orderedMatch) {
+                    const match = unorderedMatch || orderedMatch;
+                    const indent = match[1].length;
+                    const level = Math.floor(indent / 2);
+                    const content = unorderedMatch ? match[3] : match[3];
+
+                    if (!inList) {
+                        inList = true;
+                        isOrdered = !!orderedMatch;
+                        orderedCounter = 0;
+                    }
+
+                    orderedCounter++;
+                    const attrs = isOrdered
+                        ? `data-level="${level}" data-ordered="true" data-index="${orderedCounter}"`
+                        : `data-level="${level}"`;
+                    listItems.push(`<li class="md-li" ${attrs}>${content}</li>`);
+                } else {
+                    if (inList && listItems.length > 0) {
+                        processedLines.push(`<ul class="md-list">${listItems.join('')}</ul>`);
+                        listItems = [];
+                        inList = false;
+                        orderedCounter = 0;
+                    }
+                    processedLines.push(line);
+                }
+            }
+
+            if (listItems.length > 0) {
+                processedLines.push(`<ul class="md-list">${listItems.join('')}</ul>`);
+            }
+
+            html = processedLines.join('\n');
+
+            // Paragraphs - wrap text blocks
             const parts = html.split(/\n\n+/);
             html = parts.map(p => {
                 p = p.trim();
                 if (!p) return '';
-                if (p.startsWith('<h') || p.startsWith('<pre') || p.startsWith('<ul') || p.startsWith('<ol')) {
+                if (p.startsWith('<h') || p.startsWith('<div class="code-block"') ||
+                    p.startsWith('<ul') || p.startsWith('<ol') || p.startsWith('<table') ||
+                    p.startsWith('<hr') || p.startsWith('<blockquote')) {
                     return p;
                 }
-                return `<p>${p.replace(/\n/g, '<br>')}</p>`;
+                return `<p class="md-p">${p.replace(/\n/g, '<br>')}</p>`;
             }).join('');
 
             return html;
+        }
+
+        // RP-specific markdown parser for character messages
+        function parseRPMarkdown(text) {
+            // Escape HTML
+            let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+            // Convert *actions* to styled spans BEFORE markdown processing
+            // Use placeholder to protect from italic conversion
+            const actions = [];
+            html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, (_, content) => {
+                actions.push(content);
+                return `__ACTION_${actions.length - 1}__`;
+            });
+
+            // Apply markdown (code blocks, inline code, bold)
+            html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+                const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
+                return `<div class="code-block">${langLabel}<pre><code>${code.trim()}</code></pre></div>`;
+            });
+            html = html.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+            html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+            // Restore actions with styling
+            html = html.replace(/__ACTION_(\d+)__/g, (_, i) =>
+                `<span class="rp-action">${actions[parseInt(i)]}</span>`);
+
+            // Line breaks
+            html = html.replace(/\n/g, '<br>');
+            return html;
+        }
+
+        // Create message element with optional header for character messages
+        function createMessageElement(role, content, contextLevel) {
+            const div = document.createElement('div');
+            div.className = `history-message ${role}`;
+            div.setAttribute('data-context-level', contextLevel);
+
+            if (role === 'character') {
+                // Get latest character name from localStorage (may have been updated in settings)
+                const characterName = localStorage.getItem('characterName') || 'Character';
+
+                // Header with avatar and name
+                const header = document.createElement('div');
+                header.className = 'message-header';
+
+                const avatar = document.createElement('span');
+                avatar.className = 'message-avatar';
+                avatar.textContent = characterName.charAt(0).toUpperCase();
+                header.appendChild(avatar);
+
+                const name = document.createElement('span');
+                name.className = 'message-header-name character';
+                name.textContent = characterName;
+                header.appendChild(name);
+
+                div.appendChild(header);
+            }
+
+            // Content
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+
+            if (role === 'character') {
+                contentDiv.innerHTML = parseRPMarkdown(content);
+            } else if (role === 'assistant') {
+                contentDiv.innerHTML = parseMarkdown(content);
+            } else {
+                contentDiv.textContent = content;
+            }
+
+            div.appendChild(contentDiv);
+            return div;
         }
 
         // Tab to toggle screenshot, Escape to dismiss, Enter to submit
         chatInput.addEventListener('keydown', async (e) => {
             if (e.key === 'Tab') {
                 e.preventDefault();
+
+                // Check if trying to enable screenshot
+                if (!AppState.includeScreenshot) {
+                    // Check if current model supports vision
+                    const currentSupportsVision = AppState.activeContextLevel === 0
+                        ? AppState.assistantSupportsVision
+                        : AppState.rpSupportsVision;
+
+                    if (!currentSupportsVision) {
+                        updateStatus("Model doesn't support images", 'listening');
+                        setTimeout(() => updateStatus('', ''), 2000);
+                        return;
+                    }
+                }
+
                 AppState.includeScreenshot = !AppState.includeScreenshot;
                 localStorage.setItem('screenshotEnabled', AppState.includeScreenshot);
                 updateScreenshotVisual();
@@ -1996,30 +2578,29 @@
                 }
 
                 // Add user message to history immediately
-                const userDiv = document.createElement('div');
-                userDiv.className = 'history-message user';
-                userDiv.textContent = message;
-                userDiv.setAttribute('data-context-level', contextLevel);
+                const userDiv = createMessageElement('user', message, contextLevel);
                 historyContent.appendChild(userDiv);
 
-                // Scroll to bottom
-                scrollHistoryToBottom();
+                // Track this user message for scroll limiting during streaming
+                currentUserMessageElement = userDiv;
+
+                // Scroll to bottom (force since user just sent a message)
+                scrollHistoryToBottom(true);
 
                 // Determine response role based on context level
                 const responseRole = contextLevel === 1 ? 'character' : 'assistant';
 
                 // Create streaming message div with thinking indicator
-                const streamDiv = document.createElement('div');
-                streamDiv.className = `history-message ${responseRole}`;
+                const streamDiv = createMessageElement(responseRole, '', contextLevel);
                 streamDiv.id = 'streaming-message';
-                streamDiv.setAttribute('data-context-level', contextLevel);
-                streamDiv.innerHTML = 'Thinking<span class="thinking-indicator"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
+                const streamContent = streamDiv.querySelector('.message-content');
+                streamContent.innerHTML = 'Thinking<span class="thinking-indicator"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
                 historyContent.appendChild(streamDiv);
 
                 // Track streaming content
                 let assistantContent = '';
 
-                scrollHistoryToBottom();
+                scrollHistoryToBottom(true);
 
                 // Set up stream listeners
                 const unlistenChunk = await listen('chat-stream-chunk', (event) => {
@@ -2030,14 +2611,20 @@
                         assistantContent += chunk;
                         const el = document.getElementById('streaming-message');
                         if (el) {
-                            el.textContent = assistantContent;
+                            const contentEl = el.querySelector('.message-content');
+                            if (contentEl) {
+                                contentEl.innerHTML = parseRPMarkdown(assistantContent);
+                            }
                         }
                     } else if (role === 'assistant' && contextLevel === 0) {
                         // Assistant response (level 0)
                         assistantContent += chunk;
                         const el = document.getElementById('streaming-message');
                         if (el) {
-                            el.innerHTML = parseMarkdown(assistantContent);
+                            const contentEl = el.querySelector('.message-content');
+                            if (contentEl) {
+                                contentEl.innerHTML = parseMarkdown(assistantContent);
+                            }
                         }
                     }
                     scrollHistoryToBottom();
@@ -2054,8 +2641,11 @@
                     console.error('[Chat] Stream error:', event.payload);
                     const el = document.getElementById('streaming-message');
                     if (el) {
-                        el.textContent = 'Error: ' + event.payload.error;
-                        el.style.color = '#f87171';
+                        const contentEl = el.querySelector('.message-content');
+                        if (contentEl) {
+                            contentEl.textContent = 'Error: ' + event.payload.error;
+                            contentEl.style.color = '#f87171';
+                        }
                     }
                 });
 
@@ -2067,8 +2657,11 @@
                     console.error('[Chat] Error:', error);
                     const el = document.getElementById('streaming-message');
                     if (el) {
-                        el.textContent = 'Error: ' + error;
-                        el.style.color = '#f87171';
+                        const contentEl = el.querySelector('.message-content');
+                        if (contentEl) {
+                            contentEl.textContent = 'Error: ' + error;
+                            contentEl.style.color = '#f87171';
+                        }
                     }
                 } finally {
                     // Clean up listeners
@@ -2078,6 +2671,8 @@
                     // Clean up streaming IDs
                     const streamEl = document.getElementById('streaming-message');
                     if (streamEl) streamEl.removeAttribute('id');
+                    // Clear the user message tracking so future scrolls work normally
+                    currentUserMessageElement = null;
                 }
             }
         });
@@ -2139,24 +2734,12 @@
                 }
 
                 history.forEach(msg => {
-                    const div = document.createElement('div');
-                    div.className = `history-message ${msg.role}`;
-
-                    // Store context level for filtering
-                    div.setAttribute('data-context-level', msg.context_level || 0);
-
-                    // Use markdown parsing for assistant messages, plain text for user/character
-                    if (msg.role === 'assistant') {
-                        div.innerHTML = parseMarkdown(msg.content);
-                    } else {
-                        div.textContent = msg.content;
-                    }
-
+                    const div = createMessageElement(msg.role, msg.content, msg.context_level || 0);
                     historyContent.appendChild(div);
                 });
 
-                // Scroll to bottom
-                scrollHistoryToBottom();
+                // Scroll to bottom (force since loading initial history)
+                scrollHistoryToBottom(true);
             } catch (error) {
                 console.error('[History] Failed to load:', error);
                 historyContent.innerHTML = '<div class="history-empty">Failed to load history</div>';
@@ -2169,8 +2752,9 @@
             await loadChatHistory();
             updateLevelIndicator();
             applyHistoryFilter(); // Apply filter based on current level (0 on re-open)
-            // Scroll to bottom after everything is loaded
-            scrollHistoryToBottom();
+            // Scroll to bottom after everything is loaded (force since opening modal)
+            scrollHistoryToBottom(true);
+            chatInput.focus();
         }
 
         function hideHistoryModal() {
@@ -2189,6 +2773,14 @@
             hideHistoryModal();
         };
 
+        // Make history header draggable
+        document.querySelector('.history-header').addEventListener('mousedown', async (e) => {
+            // Don't drag if clicking on buttons or tabs
+            if (e.target.closest('button') || e.target.closest('.chat-tab')) return;
+            const win = getCurrentWindow();
+            await win.startDragging();
+        });
+
         // Tab click handlers - exclusive selection (not toggles)
         document.querySelectorAll('.chat-tab').forEach(tab => {
             tab.addEventListener('click', () => {
@@ -2196,6 +2788,19 @@
 
                 // Set active level (exclusive, not toggle)
                 AppState.activeContextLevel = level;
+
+                // Check if new model supports vision
+                const newSupportsVision = level === 0
+                    ? AppState.assistantSupportsVision
+                    : AppState.rpSupportsVision;
+
+                // If screenshot is enabled but new model doesn't support vision, disable it
+                if (AppState.includeScreenshot && !newSupportsVision) {
+                    AppState.includeScreenshot = false;
+                    localStorage.setItem('screenshotEnabled', 'false');
+                    updateStatus("Model doesn't support images - screenshot disabled", 'listening');
+                    setTimeout(() => updateStatus('', ''), 2000);
+                }
 
                 AppState.historyFocusIndex = -1;
                 loadChatHistory().then(() => {
@@ -2220,6 +2825,65 @@
         listen('show-chat-history', () => {
             showHistoryModal();
         });
+
+        // Listen for model changes from settings
+        listen('model-changed', (event) => {
+            const { modelId, contextLevel, supportsVision } = event.payload;
+            console.log('[Overlay] Model changed:', modelId, 'context:', contextLevel, 'vision:', supportsVision);
+
+            // Update vision capability for the changed context level
+            if (contextLevel === 0) {
+                AppState.assistantSupportsVision = supportsVision;
+            } else if (contextLevel === 1) {
+                AppState.rpSupportsVision = supportsVision;
+            }
+
+            // If this is the current context level and screenshot is enabled but model doesn't support vision
+            if (AppState.activeContextLevel === contextLevel && AppState.includeScreenshot && !supportsVision) {
+                AppState.includeScreenshot = false;
+                localStorage.setItem('screenshotEnabled', 'false');
+                updateScreenshotVisual();
+                updateStatus("Model doesn't support images - screenshot disabled", 'listening');
+                setTimeout(() => updateStatus('', ''), 2000);
+            }
+        });
+
+        // Listen for prompts saved to refresh chat history with new character name
+        listen('prompts-saved', async (event) => {
+            console.log('[Overlay] Prompts saved, refreshing chat history');
+            const isHistoryOpen = historyModal.classList.contains('visible');
+            if (isHistoryOpen) {
+                await loadChatHistory();
+                applyHistoryFilter();
+            }
+        });
+
+        // Initialize vision capability on load
+        async function initVisionCapability() {
+            try {
+                const config = await invoke('get_llm_config_cmd');
+                const assistantVision = await invoke('get_model_supports_vision', { modelId: config.assistant_model });
+                const rpVision = await invoke('get_model_supports_vision', { modelId: config.rp_model });
+
+                AppState.assistantSupportsVision = assistantVision;
+                AppState.rpSupportsVision = rpVision;
+
+                console.log('[Overlay] Vision capability initialized - Assistant:', assistantVision, 'RP:', rpVision);
+
+                // Check if current model doesn't support vision and screenshot is enabled
+                const currentSupportsVision = AppState.activeContextLevel === 0 ? assistantVision : rpVision;
+                if (AppState.includeScreenshot && !currentSupportsVision) {
+                    AppState.includeScreenshot = false;
+                    localStorage.setItem('screenshotEnabled', 'false');
+                    updateScreenshotVisual();
+                }
+            } catch (err) {
+                console.error('[Overlay] Failed to init vision capability:', err);
+            }
+        }
+
+        // Call init after a short delay to ensure everything is loaded
+        setTimeout(initVisionCapability, 500);
 
         // ============ UI Helpers ============
         function updateStatus(text, className) {
@@ -2281,10 +2945,24 @@
         });
 
         // Initialize
+        // Check debug mode and show inspect option if enabled
+        async function initDebugMenu() {
+            try {
+                const isDebug = await invoke('is_debug_mode');
+                if (isDebug) {
+                    document.getElementById('debugSeparator').style.display = '';
+                    document.getElementById('menuInspect').style.display = '';
+                }
+            } catch (e) {
+                // Not in debug mode or command not available
+            }
+        }
+
         window.addEventListener('DOMContentLoaded', async () => {
             live2dOverlay.initApp();
             updateTooltips();
             resizeHitboxCanvas();
+            initDebugMenu();
 
             // Check if model is already downloaded before attempting to load
             // On first launch, model may not exist yet - init-complete will trigger load later

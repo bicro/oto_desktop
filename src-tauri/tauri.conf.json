@@ -60,7 +60,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "signingIdentity": "-",
+      "signingIdentity": null,
       "hardenedRuntime": true,
       "entitlements": "Entitlements.plist"
     },
