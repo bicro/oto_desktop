@@ -1446,7 +1446,476 @@
             }
         }
 
-        const live2dOverlay = new Live2DOverlay();
+        // ============ Robot Lamp Overlay (PIXI.Graphics-based) ============
+        class RobotLampOverlay {
+            constructor() {
+                this.app = null;
+                this.model = null; // container that acts as the "model" for compatibility
+                this.isInitialized = false;
+                this.originalModelWidth = 300;
+                this.originalModelHeight = 400;
+                this.characterScale = 1.0;
+                this.characterOffsetX = 0;
+                this.characterOffsetY = 0;
+                this.showOutline = false;
+                this.transformEditMode = false;
+                this.outlineGraphics = null;
+                this.dragState = null;
+                this.dragStart = null;
+
+                // Lamp parameters
+                this.params = {};
+                this.idlePhase = 0;
+                this.idleHeadPhase = Math.random() * Math.PI * 2;
+                this.glowIntensity = 0;
+                this.bounceProgress = -1; // -1 = not bouncing
+
+                // Lamp parts
+                this.lampContainer = null;
+                this.glowSprite = null;
+            }
+
+            initApp() {
+                if (this.app) return;
+                const canvas = document.getElementById('live2dCanvas');
+                this.app = new PIXI.Application({
+                    view: canvas,
+                    width: window.innerWidth,
+                    height: window.innerHeight,
+                    backgroundAlpha: 0,
+                    resolution: window.devicePixelRatio || 1,
+                    autoDensity: true,
+                    antialias: true,
+                    autoStart: false,
+                });
+                setInterval(() => {
+                    if (this.app && this.app.ticker) {
+                        this.app.ticker.update();
+                    }
+                }, 16);
+                this.isInitialized = true;
+            }
+
+            // Adopt an existing PIXI app (avoids WebGL context re-creation)
+            adoptApp(existingApp) {
+                this.app = existingApp;
+                this.isInitialized = true;
+            }
+
+            async loadModel() {
+                frontendLog('info', '[RobotLamp] loadModel called');
+                if (!this.app) this.initApp();
+
+                // Clear the stage of any previous content
+                while (this.app.stage.children.length > 0) {
+                    const child = this.app.stage.children[0];
+                    this.app.stage.removeChild(child);
+                    child.destroy({ children: true });
+                }
+                this.model = null;
+                this.outlineGraphics = null;
+
+                this.lampContainer = new PIXI.Container();
+                this.model = this.lampContainer;
+                this.model.anchor = { set: (x, y) => { this.model.pivot.set(this.originalModelWidth * x, this.originalModelHeight * y); } };
+
+                this._buildLamp();
+                this.app.stage.addChild(this.model);
+                this.resizeModel();
+                this._startAnimationLoop();
+
+                frontendLog('info', '[RobotLamp] Lamp loaded successfully');
+                return { width: this.originalModelWidth, height: this.originalModelHeight };
+            }
+
+            _buildLamp() {
+                const c = this.lampContainer;
+                // Clear children
+                while (c.children.length > 0) c.removeChildAt(0);
+
+                const YELLOW = 0xF5C518;
+                const DARK_YELLOW = 0xE5A800;
+                const ORANGE = 0xF0960F;
+                const W = this.originalModelWidth;  // 300
+                const H = this.originalModelHeight; // 400
+
+                // Glow effect (drawn first, behind everything)
+                this.glowGraphics = new PIXI.Graphics();
+                c.addChild(this.glowGraphics);
+
+                // Main body graphics
+                this.bodyGraphics = new PIXI.Graphics();
+                c.addChild(this.bodyGraphics);
+
+                this._drawLampBody(0, 0, 0);
+            }
+
+            _drawLampBody(headAngleX, headAngleY, mouthOpen) {
+                const g = this.bodyGraphics;
+                const glow = this.glowGraphics;
+                g.clear();
+                glow.clear();
+
+                const YELLOW = 0xF5C518;
+                const DARK_YELLOW = 0xE5A800;
+                const ORANGE = 0xF0960F;
+                const W = this.originalModelWidth;
+                const H = this.originalModelHeight;
+
+                // Idle sway offsets
+                const idleSway = Math.sin(this.idlePhase) * 3;
+                const idleHeadSway = Math.sin(this.idleHeadPhase) * 5;
+
+                // Combine head tracking with idle sway
+                const totalHeadX = (headAngleX / 30) * 25 + idleSway + idleHeadSway;
+                const totalHeadY = (headAngleY / 30) * 15;
+
+                // Bounce compression
+                let bounceSquash = 1.0;
+                if (this.bounceProgress >= 0 && this.bounceProgress <= 1) {
+                    bounceSquash = 1.0 - 0.15 * Math.sin(this.bounceProgress * Math.PI);
+                }
+
+                // === BASE ===
+                const baseX = W * 0.35;
+                const baseY = H * 0.88;
+                const baseW = W * 0.30;
+                const baseH = H * 0.07;
+
+                g.beginFill(YELLOW);
+                g.drawRoundedRect(baseX, baseY, baseW, baseH, 4);
+                g.endFill();
+
+                // Base bottom lip
+                g.beginFill(DARK_YELLOW);
+                g.drawRoundedRect(baseX - 4, baseY + baseH - 6, baseW + 8, 8, 3);
+                g.endFill();
+
+                // === LOWER ARM ===
+                const lowerArmStartX = baseX + baseW * 0.5;
+                const lowerArmStartY = baseY;
+                const lowerArmLen = H * 0.32 * bounceSquash;
+                const lowerArmAngle = -Math.PI * 0.38 + totalHeadX * 0.003;
+                const lowerArmEndX = lowerArmStartX + Math.sin(lowerArmAngle) * lowerArmLen;
+                const lowerArmEndY = lowerArmStartY - Math.cos(lowerArmAngle) * lowerArmLen;
+
+                const armWidth = 10;
+                g.lineStyle(armWidth, YELLOW, 1);
+                g.moveTo(lowerArmStartX, lowerArmStartY);
+                g.lineTo(lowerArmEndX, lowerArmEndY);
+                g.lineStyle(0);
+
+                // Base joint
+                g.beginFill(DARK_YELLOW);
+                g.drawCircle(lowerArmStartX, lowerArmStartY, 8);
+                g.endFill();
+
+                // === ELBOW JOINT ===
+                g.beginFill(DARK_YELLOW);
+                g.drawCircle(lowerArmEndX, lowerArmEndY, 7);
+                g.endFill();
+
+                // === UPPER ARM ===
+                const upperArmLen = H * 0.28 * bounceSquash;
+                const upperArmAngle = Math.PI * 0.25 + totalHeadX * 0.008 + totalHeadY * 0.003;
+                const upperArmEndX = lowerArmEndX + Math.sin(upperArmAngle) * upperArmLen;
+                const upperArmEndY = lowerArmEndY - Math.cos(upperArmAngle) * upperArmLen;
+
+                g.lineStyle(armWidth, YELLOW, 1);
+                g.moveTo(lowerArmEndX, lowerArmEndY);
+                g.lineTo(upperArmEndX, upperArmEndY);
+                g.lineStyle(0);
+
+                // Upper arm joint
+                g.beginFill(DARK_YELLOW);
+                g.drawCircle(upperArmEndX, upperArmEndY, 6);
+                g.endFill();
+
+                // === LAMP HEAD (rounded bell shape) ===
+                const headPivotX = upperArmEndX;
+                const headPivotY = upperArmEndY;
+                const headTiltAngle = totalHeadX * 0.015 + totalHeadY * 0.01;
+                const headSize = 30;
+
+                const coneLen = headSize * 1.6;
+                const coneOpeningHalf = headSize * 0.9;
+
+                // Direction the lamp head faces (downward with tilt)
+                const headDirAngle = Math.PI * 0.55 + headTiltAngle;
+                const headDirX = Math.sin(headDirAngle);
+                const headDirY = Math.cos(headDirAngle);
+
+                // Perpendicular for cone width
+                const perpX = headDirY;
+                const perpY = -headDirX;
+
+                const tipX = headPivotX;
+                const tipY = headPivotY;
+
+                // Key points along the head
+                const openCenterX = tipX + headDirX * coneLen;
+                const openCenterY = tipY + headDirY * coneLen;
+                const openLeftX = openCenterX - perpX * coneOpeningHalf;
+                const openLeftY = openCenterY - perpY * coneOpeningHalf;
+                const openRightX = openCenterX + perpX * coneOpeningHalf;
+                const openRightY = openCenterY + perpY * coneOpeningHalf;
+
+                // Rounded top (dome back of head)
+                const neckHalf = 8;
+                const neckLeftX = tipX - perpX * neckHalf;
+                const neckLeftY = tipY - perpY * neckHalf;
+                const neckRightX = tipX + perpX * neckHalf;
+                const neckRightY = tipY + perpY * neckHalf;
+
+                // Control points for bezier curves (bulge outward for round bell)
+                const bulgeFactor = 0.65;
+                const midLen = coneLen * 0.45;
+                const midBulge = coneOpeningHalf * 1.15;
+
+                const cpLeftX = tipX + headDirX * midLen - perpX * midBulge * bulgeFactor;
+                const cpLeftY = tipY + headDirY * midLen - perpY * midBulge * bulgeFactor;
+                const cpRightX = tipX + headDirX * midLen + perpX * midBulge * bulgeFactor;
+                const cpRightY = tipY + headDirY * midLen + perpY * midBulge * bulgeFactor;
+
+                // Outer shell (yellow) with curved sides
+                g.beginFill(YELLOW);
+                g.moveTo(neckLeftX, neckLeftY);
+                g.quadraticCurveTo(cpLeftX, cpLeftY, openLeftX, openLeftY);
+                // Rounded rim at the bottom
+                g.quadraticCurveTo(openCenterX + headDirX * 4, openCenterY + headDirY * 4, openRightX, openRightY);
+                g.quadraticCurveTo(cpRightX, cpRightY, neckRightX, neckRightY);
+                // Rounded back (dome top)
+                g.quadraticCurveTo(tipX - headDirX * 6, tipY - headDirY * 6, neckLeftX, neckLeftY);
+                g.closePath();
+                g.endFill();
+
+                // Darker rim/lip at the opening
+                g.lineStyle(3, DARK_YELLOW, 1);
+                g.moveTo(openLeftX, openLeftY);
+                g.quadraticCurveTo(openCenterX + headDirX * 4, openCenterY + headDirY * 4, openRightX, openRightY);
+                g.lineStyle(0);
+
+                // Inner cone (orange - the "bulb area") with curved shape
+                const innerScale = 0.65;
+                const innerOpenLeftX = openCenterX - perpX * coneOpeningHalf * innerScale;
+                const innerOpenLeftY = openCenterY - perpY * coneOpeningHalf * innerScale;
+                const innerOpenRightX = openCenterX + perpX * coneOpeningHalf * innerScale;
+                const innerOpenRightY = openCenterY + perpY * coneOpeningHalf * innerScale;
+                const innerTipX = tipX + headDirX * coneLen * 0.35;
+                const innerTipY = tipY + headDirY * coneLen * 0.35;
+
+                const innerCpLeftX = innerTipX + headDirX * midLen * 0.4 - perpX * coneOpeningHalf * innerScale * 0.5;
+                const innerCpLeftY = innerTipY + headDirY * midLen * 0.4 - perpY * coneOpeningHalf * innerScale * 0.5;
+                const innerCpRightX = innerTipX + headDirX * midLen * 0.4 + perpX * coneOpeningHalf * innerScale * 0.5;
+                const innerCpRightY = innerTipY + headDirY * midLen * 0.4 + perpY * coneOpeningHalf * innerScale * 0.5;
+
+                g.beginFill(ORANGE);
+                g.moveTo(innerTipX, innerTipY);
+                g.quadraticCurveTo(innerCpLeftX, innerCpLeftY, innerOpenLeftX, innerOpenLeftY);
+                g.lineTo(innerOpenRightX, innerOpenRightY);
+                g.quadraticCurveTo(innerCpRightX, innerCpRightY, innerTipX, innerTipY);
+                g.closePath();
+                g.endFill();
+
+                // === GLOW EFFECT ===
+                const glowAlpha = 0.08 + mouthOpen * 0.35;
+                const glowRadius = 40 + mouthOpen * 60;
+
+                // Draw multiple concentric circles for radial glow
+                for (let i = 5; i >= 0; i--) {
+                    const r = glowRadius * (i / 5);
+                    const a = glowAlpha * (1 - i / 6) * 0.5;
+                    glow.beginFill(0xFFE4B0, a);
+                    glow.drawCircle(openCenterX, openCenterY, r);
+                    glow.endFill();
+                }
+
+                // Bright center dot
+                glow.beginFill(0xFFFFFF, glowAlpha * 0.8);
+                glow.drawCircle(openCenterX, openCenterY, 6 + mouthOpen * 8);
+                glow.endFill();
+            }
+
+            _startAnimationLoop() {
+                if (this._animating) return;
+                this._animating = true;
+
+                const animate = () => {
+                    if (!this._animating) return;
+
+                    // Update idle phases
+                    this.idlePhase += 0.015;
+                    this.idleHeadPhase += 0.008;
+
+                    // Random head look
+                    if (Math.random() < 0.001) {
+                        this.idleHeadPhase += Math.random() * 2 - 1;
+                    }
+
+                    // Update bounce
+                    if (this.bounceProgress >= 0) {
+                        this.bounceProgress += 0.05;
+                        if (this.bounceProgress > 1) this.bounceProgress = -1;
+                    }
+
+                    // Get current params
+                    const headX = this.params['ParamAngleX'] || 0;
+                    const headY = this.params['ParamAngleY'] || 0;
+                    const mouth = this.params['ParamMouthOpenY'] || 0;
+
+                    this._drawLampBody(headX, headY, Math.max(0, Math.min(1, mouth)));
+
+                    requestAnimationFrame(animate);
+                };
+                requestAnimationFrame(animate);
+            }
+
+            updateModelTransform(canvasWidth, canvasHeight) {
+                if (!this.model) return;
+
+                // Fit lamp within window (no bust multiplier — lamp should be fully visible)
+                const baseScaleX = canvasWidth / this.originalModelWidth;
+                const baseScaleY = canvasHeight / this.originalModelHeight;
+                const baseScale = Math.min(baseScaleX, baseScaleY) * 0.85; // 85% of window
+
+                const finalScale = baseScale * this.characterScale;
+                this.model.scale.set(finalScale);
+
+                // Center the lamp in the window
+                this.model.x = canvasWidth / 2 + this.characterOffsetX;
+                this.model.y = canvasHeight / 2 + this.characterOffsetY;
+                this.model.pivot.set(this.originalModelWidth * 0.5, this.originalModelHeight * 0.5);
+
+                this.renderOutline();
+            }
+
+            resizeModel() {
+                this.updateModelTransform(window.innerWidth, window.innerHeight);
+            }
+
+            resizeCanvas(width, height) {
+                if (!this.app || !this.app.renderer) return;
+                this.app.renderer.resize(width, height);
+                this.updateModelTransform(width, height);
+            }
+
+            initOutlineGraphics() {
+                if (!this.app || this.outlineGraphics) return;
+                this.outlineGraphics = new PIXI.Graphics();
+                this.app.stage.addChild(this.outlineGraphics);
+            }
+
+            renderOutline() {
+                if (!this.outlineGraphics) this.initOutlineGraphics();
+                if (!this.outlineGraphics) return;
+                this.outlineGraphics.clear();
+                const w = window.innerWidth;
+                const h = window.innerHeight;
+                if (this.showOutline || this.transformEditMode) {
+                    const padding = 2;
+                    this.outlineGraphics.lineStyle(2, 0x00FFFF, 0.8);
+                    this.outlineGraphics.drawRect(padding, padding, w - padding * 2, h - padding * 2);
+                }
+                if (this.transformEditMode) {
+                    const handleSize = 12;
+                    this.outlineGraphics.beginFill(0x00FFFF, 1);
+                    this.outlineGraphics.drawRect(-handleSize/2, -handleSize/2, handleSize, handleSize);
+                    this.outlineGraphics.drawRect(w - handleSize/2, -handleSize/2, handleSize, handleSize);
+                    this.outlineGraphics.drawRect(-handleSize/2, h - handleSize/2, handleSize, handleSize);
+                    this.outlineGraphics.drawRect(w - handleSize/2, h - handleSize/2, handleSize, handleSize);
+                    this.outlineGraphics.endFill();
+                }
+            }
+
+            drawHandle(x, y, size) {
+                this.outlineGraphics.drawRect(x - size / 2, y - size / 2, size, size);
+            }
+
+            setupTransformHandlers() {
+                const canvas = document.getElementById('live2dCanvas');
+                canvas.addEventListener('mousedown', (e) => this.onTransformMouseDown(e));
+                canvas.addEventListener('mousemove', (e) => this.onTransformMouseMove(e));
+                canvas.addEventListener('mouseup', (e) => this.onTransformMouseUp(e));
+                canvas.addEventListener('mouseleave', (e) => this.onTransformMouseUp(e));
+            }
+
+            getWindowHandleAtPoint(x, y) {
+                const handleSize = 16;
+                const w = window.innerWidth;
+                const h = window.innerHeight;
+                const handles = [
+                    { name: 'TopLeft', x: 0, y: 0 },
+                    { name: 'TopRight', x: w, y: 0 },
+                    { name: 'BottomLeft', x: 0, y: h },
+                    { name: 'BottomRight', x: w, y: h },
+                    { name: 'Top', x: w / 2, y: 0 },
+                    { name: 'Bottom', x: w / 2, y: h },
+                    { name: 'Left', x: 0, y: h / 2 },
+                    { name: 'Right', x: w, y: h / 2 },
+                ];
+                for (const handle of handles) {
+                    if (Math.abs(x - handle.x) < handleSize && Math.abs(y - handle.y) < handleSize) {
+                        return handle.name;
+                    }
+                }
+                return null;
+            }
+
+            async onTransformMouseDown(e) {
+                if (!this.transformEditMode || !this.model) return;
+                const x = e.clientX;
+                const y = e.clientY;
+                const resizeHandle = this.getWindowHandleAtPoint(x, y);
+                if (resizeHandle) {
+                    e.preventDefault();
+                    const win = getCurrentWindow();
+                    await win.startResizing(resizeHandle);
+                    return;
+                }
+                this.dragState = 'move';
+                this.dragStart = { x, y, offsetX: this.characterOffsetX, offsetY: this.characterOffsetY };
+                e.preventDefault();
+            }
+
+            onTransformMouseMove(e) {
+                if (!this.dragState || !this.transformEditMode) return;
+                const dx = e.clientX - this.dragStart.x;
+                const dy = e.clientY - this.dragStart.y;
+                this.characterOffsetX = this.dragStart.offsetX + dx;
+                this.characterOffsetY = this.dragStart.offsetY + dy;
+                this.resizeModel();
+            }
+
+            async onTransformMouseUp(e) {
+                if (this.dragState === 'move') {
+                    try {
+                        await invoke('save_transform_config', {
+                            scale: this.characterScale,
+                            offsetX: this.characterOffsetX,
+                            offsetY: this.characterOffsetY
+                        });
+                    } catch (err) {
+                        console.error('[RobotLamp] Failed to save transform:', err);
+                    }
+                }
+                this.dragState = null;
+                this.dragStart = null;
+            }
+
+            getCoreModel() {
+                return null; // No Live2D core model
+            }
+
+            setParameter(paramId, value) {
+                this.params[paramId] = Number(value);
+            }
+
+            triggerBounce() {
+                this.bounceProgress = 0;
+            }
+        }
+
+        let live2dOverlay = new Live2DOverlay();
         window.live2dOverlay = live2dOverlay;
 
         // ============ Auto-load model on window open ============
@@ -1473,11 +1942,41 @@
                 const modelPath = `${modelsPath}/${config.folder}`;
                 const modelFileName = config.model_file;
 
-                frontendLog('info', '[Overlay] Full model path:', modelPath);
-                frontendLog('info', '[Overlay] Model filename:', modelFileName);
-                frontendLog('info', '[Overlay] Loading model...');
-                await live2dOverlay.loadModel(modelPath, modelFileName);
-                frontendLog('info', '[Overlay] Model loaded successfully!');
+                // Detect if this is a RobotLamp model
+                const isRobotLamp = config.folder === 'RobotLamp' || modelFileName.includes('.lamp.');
+                if (isRobotLamp) {
+                    frontendLog('info', '[Overlay] Detected RobotLamp model, switching overlay');
+                    // Replace the overlay with RobotLampOverlay, reusing the PIXI app
+                    if (!(live2dOverlay instanceof RobotLampOverlay)) {
+                        const existingApp = live2dOverlay.app;
+                        // Ensure old app is initialized
+                        if (!existingApp) live2dOverlay.initApp();
+                        const appToAdopt = live2dOverlay.app;
+                        live2dOverlay = new RobotLampOverlay();
+                        live2dOverlay.adoptApp(appToAdopt);
+                        window.live2dOverlay = live2dOverlay;
+                        live2dOverlay.setupTransformHandlers();
+                    }
+                    await live2dOverlay.loadModel();
+                } else {
+                    // Standard Live2D flow
+                    if (!(live2dOverlay instanceof Live2DOverlay)) {
+                        const existingApp = live2dOverlay.app;
+                        live2dOverlay._animating = false; // stop lamp animation loop
+                        live2dOverlay = new Live2DOverlay();
+                        if (existingApp) {
+                            live2dOverlay.app = existingApp;
+                            live2dOverlay.isInitialized = true;
+                        }
+                        window.live2dOverlay = live2dOverlay;
+                        live2dOverlay.setupTransformHandlers();
+                    }
+                    frontendLog('info', '[Overlay] Full model path:', modelPath);
+                    frontendLog('info', '[Overlay] Model filename:', modelFileName);
+                    frontendLog('info', '[Overlay] Loading model...');
+                    await live2dOverlay.loadModel(modelPath, modelFileName);
+                    frontendLog('info', '[Overlay] Model loaded successfully!');
+                }
 
                 // Load saved transform config
                 try {
@@ -2065,6 +2564,14 @@
                 document.body.classList.remove('input-hidden');
                 document.body.classList.add('hover-enabled');
                 chatInput.focus();
+            }
+        });
+
+        // Click-to-bounce for RobotLamp
+        document.body.addEventListener('click', (event) => {
+            if (live2dOverlay instanceof RobotLampOverlay && live2dOverlay.model) {
+                if (event.target.closest('.chat-panel') || event.target.closest('.context-menu')) return;
+                live2dOverlay.triggerBounce();
             }
         });
 
